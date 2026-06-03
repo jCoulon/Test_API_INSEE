@@ -517,13 +517,22 @@ document.getElementById("searchForm").addEventListener("submit", async (e) => {
         if (siretInputVal.length > 0) {
             const sirets = siretInputVal.split(",").map(s => s.trim()).filter(s => s.length > 0);
             searchLabel = sirets.join(", ");
-            const results = await Promise.all(sirets.map(s => searchBySiret(s, apiKey)));
-            currentResults = results.flat();
+            // Sequential with rate limiting to avoid 429
+            for (let i = 0; i < sirets.length; i++) {
+                searchText.textContent = `Recherche ${i + 1}/${sirets.length}...`;
+                const res = await searchBySiret(sirets[i], apiKey);
+                currentResults.push(...res);
+                if (i < sirets.length - 1) await delay(300);
+            }
         } else {
             const noms = nomInput.split(",").map(s => s.trim()).filter(s => s.length > 0);
             searchLabel = noms.join(", ");
-            const results = await Promise.all(noms.map(n => searchByName(n, apiKey)));
-            currentResults = results.flat();
+            for (let i = 0; i < noms.length; i++) {
+                searchText.textContent = `Recherche ${i + 1}/${noms.length}...`;
+                const res = await searchByName(noms[i], apiKey);
+                currentResults.push(...res);
+                if (i < noms.length - 1) await delay(300);
+            }
         }
         renderResults(searchLabel);
     } catch (err) {
