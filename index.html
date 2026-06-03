@@ -460,7 +460,7 @@ async function fetchWithRetry(url, apiKey, retries = MAX_RETRIES) {
                 headers: { "X-INSEE-Api-Key-Integration": apiKey, "Accept": "application/json" }
             });
             if (resp.status === 401) throw new Error("AUTH_ERROR");
-            if (resp.status === 404) return { status: 404, data: null };
+            if (resp.status === 404 || resp.status === 400) return { status: resp.status, data: null };
             if (resp.status === 429 || resp.status >= 500) {
                 if (attempt < retries) {
                     const wait = Math.min(1000 * Math.pow(2, attempt), 10000);
@@ -577,40 +577,49 @@ function getSignificantWords(text) {
     return significant.length > 0 ? significant : words;
 }
 
+async function trySearch(fn) {
+    // Run a search strategy safely — if it fails (400, etc.), return [] instead of crashing
+    try { return await fn(); } catch (e) {
+        if (e.message === "AUTH_ERROR") throw e;
+        return [];
+    }
+}
+
 async function smartSearchByName(nom, apiKey) {
+    let results;
+
     // Strategy 1: exact quoted match (full name)
-    let results = await searchByName(nom, apiKey);
+    results = await trySearch(() => searchByName(nom, apiKey));
     if (results.length > 0) return results;
     await delay(400);
 
     // Strategy 2: simplified name, exact quoted
     const simplified = simplifyName(nom);
     if (simplified !== nom.toUpperCase()) {
-        results = await searchByName(simplified, apiKey);
+        results = await trySearch(() => searchByName(simplified, apiKey));
         if (results.length > 0) return results;
         await delay(400);
     }
 
-    // Strategy 3: all words unquoted with parentheses (matches each word independently)
-    // e.g. "PHARMACIE MICHAU" -> denominationUniteLegale:(PHARMACIE MICHAU)
+    // Strategy 3: all words with parentheses (matches each word independently)
     const allWords = simplified.split(" ").filter(w => w.length >= 2);
     if (allWords.length > 0) {
-        results = await searchByWords(allWords, apiKey);
+        results = await trySearch(() => searchByWords(allWords, apiKey));
         if (results.length > 0) return results;
         await delay(400);
     }
 
-    // Strategy 4: significant words only (remove generic words)
+    // Strategy 4: significant words only with parentheses
     const sigWords = getSignificantWords(simplified);
     if (sigWords.length > 0 && sigWords.join(" ") !== allWords.join(" ")) {
-        results = await searchByWords(sigWords, apiKey);
+        results = await trySearch(() => searchByWords(sigWords, apiKey));
         if (results.length > 0) return results;
         await delay(400);
     }
 
-    // Strategy 5: wildcard on the most distinctive word (catches MICHAU -> MICHAUD)
+    // Strategy 5: wildcard on the most distinctive word (MICHAU -> MICHAUD, MICHAUX)
     for (let i = 0; i < Math.min(sigWords.length, 2); i++) {
-        results = await searchByWildcard(sigWords[i], apiKey);
+        results = await trySearch(() => searchByWildcard(sigWords[i], apiKey));
         if (results.length > 0) return results;
         await delay(400);
     }
