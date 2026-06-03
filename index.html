@@ -304,7 +304,7 @@ document.getElementById("searchForm").addEventListener("submit", async (e) => {
     errorMsg.style.display = "none";
 
     try {
-        const url = `${API_BASE}/siret?q=denominationUniteLegale:${encodeURIComponent(nom)}&nombre=100`;
+        const url = `${API_BASE}/siret?q=denominationUniteLegale:"${encodeURIComponent(nom)}"&nombre=100`;
         const resp = await fetch(url, {
             headers: {
                 "X-INSEE-Api-Key-Integration": apiKey,
