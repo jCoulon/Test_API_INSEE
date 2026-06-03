@@ -632,13 +632,23 @@ function detectColumns(headers) {
     const map = {};
     const h = headers.map(h => String(h || "").toUpperCase().trim());
 
+    // Collect all SIRET-matching columns to distinguish NIC from full SIRET
+    const siretCols = [];
     for (let i = 0; i < h.length; i++) {
         if (h[i].includes("NOM") && !h[i].includes("PRENOM") && map.nom === undefined) map.nom = i;
         if ((h[i].includes("SIREN") && !h[i].includes("SIRET")) && map.siren === undefined) map.siren = i;
-        if (h[i].includes("SIRET") && map.siret === undefined) map.siret = i;
+        if (h[i].includes("SIRET")) siretCols.push(i);
+        if (h[i].includes("NIC") && map.nic === undefined) map.nic = i;
         if ((h[i] === "CP" || h[i].includes("CODE_POSTAL") || h[i].includes("CP_DU")) && map.cp === undefined) map.cp = i;
         if ((h[i].includes("VILLE") || h[i].includes("COMMUNE")) && map.ville === undefined) map.ville = i;
         if (h[i].includes("ADRESSE") && map.adresse === undefined) map.adresse = i;
+    }
+    // If 2+ SIRET columns: first = NIC (partial), last = full SIRET
+    if (siretCols.length >= 2) {
+        map.nic = siretCols[0];
+        map.siret = siretCols[siretCols.length - 1];
+    } else if (siretCols.length === 1) {
+        map.siret = siretCols[0];
     }
     return map;
 }
@@ -661,12 +671,20 @@ function handleFile(file) {
         colMap = detectColumns(importHeaders);
         console.log("Colonnes d\u00e9tect\u00e9es:", colMap);
 
-        // Mark invalid rows
+        // Mark invalid rows and auto-fill SIRET when SIREN+NIC are valid
         if (colMap.siren !== undefined) {
             for (const row of importedData) {
                 const siren = row.cells[colMap.siren];
                 if (isSirenValid(siren)) {
                     row.status = "ok";
+                    // If NIC column exists and SIRET column is empty, build SIRET = SIREN + NIC
+                    if (colMap.nic !== undefined && colMap.siret !== undefined) {
+                        const nic = row.cells[colMap.nic].trim();
+                        const siret = row.cells[colMap.siret].trim();
+                        if (nic && /^\d+$/.test(nic) && !siret) {
+                            row.cells[colMap.siret] = siren + nic.padStart(5, "0");
+                        }
+                    }
                 } else {
                     row.status = "invalid";
                 }
@@ -786,7 +804,8 @@ async function fixInvalidSirens() {
 
                 // Update cells
                 if (colMap.siren !== undefined) row.cells[colMap.siren] = best.siren;
-                if (colMap.siret !== undefined) row.cells[colMap.siret] = best.siret;
+                if (colMap.nic !== undefined) row.cells[colMap.nic] = best.siret.slice(9); // NIC = 5 derniers chiffres
+                if (colMap.siret !== undefined) row.cells[colMap.siret] = best.siret; // SIRET complet
                 row.status = "fixed";
             }
         } catch (err) {
