@@ -529,10 +529,12 @@ async function searchByName(nom, apiKey) {
     return filterActiveEtablissements(result.data);
 }
 
-async function searchByWord(word, apiKey) {
-    // Single unquoted word search — valid Lucene syntax
+async function searchByWords(words, apiKey) {
+    // Multi-word search using parentheses — valid Lucene syntax
+    // denominationUniteLegale:(WORD1 WORD2 WORD3) matches all words in the field
+    const query = Array.isArray(words) ? words.join(" ") : words;
     const u = new URL(`${API_BASE}/siret`);
-    u.searchParams.set("q", `denominationUniteLegale:${word}`);
+    u.searchParams.set("q", `denominationUniteLegale:(${query})`);
     u.searchParams.set("nombre", "20");
     const result = await fetchWithRetry(u.toString(), apiKey);
     if (result.status === 404 || !result.data) return [];
@@ -576,7 +578,7 @@ function getSignificantWords(text) {
 }
 
 async function smartSearchByName(nom, apiKey) {
-    // Strategy 1: exact quoted match
+    // Strategy 1: exact quoted match (full name)
     let results = await searchByName(nom, apiKey);
     if (results.length > 0) return results;
     await delay(400);
@@ -589,17 +591,26 @@ async function smartSearchByName(nom, apiKey) {
         await delay(400);
     }
 
-    // Strategy 3: search the most specific single word (unquoted)
-    const words = getSignificantWords(simplified);
-    for (let i = 0; i < Math.min(words.length, 3); i++) {
-        results = await searchByWord(words[i], apiKey);
+    // Strategy 3: all words unquoted with parentheses (matches each word independently)
+    // e.g. "PHARMACIE MICHAU" -> denominationUniteLegale:(PHARMACIE MICHAU)
+    const allWords = simplified.split(" ").filter(w => w.length >= 2);
+    if (allWords.length > 0) {
+        results = await searchByWords(allWords, apiKey);
         if (results.length > 0) return results;
         await delay(400);
     }
 
-    // Strategy 4: wildcard on the most specific word (catches MICHAU -> MICHAUD)
-    for (let i = 0; i < Math.min(words.length, 2); i++) {
-        results = await searchByWildcard(words[i], apiKey);
+    // Strategy 4: significant words only (remove generic words)
+    const sigWords = getSignificantWords(simplified);
+    if (sigWords.length > 0 && sigWords.join(" ") !== allWords.join(" ")) {
+        results = await searchByWords(sigWords, apiKey);
+        if (results.length > 0) return results;
+        await delay(400);
+    }
+
+    // Strategy 5: wildcard on the most distinctive word (catches MICHAU -> MICHAUD)
+    for (let i = 0; i < Math.min(sigWords.length, 2); i++) {
+        results = await searchByWildcard(sigWords[i], apiKey);
         if (results.length > 0) return results;
         await delay(400);
     }
