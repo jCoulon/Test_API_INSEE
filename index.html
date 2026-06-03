@@ -521,15 +521,19 @@ function filterActiveEtablissements(data) {
 }
 
 async function searchByName(nom, apiKey) {
-    const url = `${API_BASE}/siret?q=denominationUniteLegale:"${encodeURIComponent(nom)}"&nombre=100`;
-    const result = await fetchWithRetry(url, apiKey);
+    const u = new URL(`${API_BASE}/siret`);
+    u.searchParams.set("q", `denominationUniteLegale:"${nom}"`);
+    u.searchParams.set("nombre", "100");
+    const result = await fetchWithRetry(u.toString(), apiKey);
     if (result.status === 404 || !result.data) return [];
     return filterActiveEtablissements(result.data);
 }
 
 async function searchByNameRaw(query, apiKey) {
-    const url = `${API_BASE}/siret?q=denominationUniteLegale:${encodeURIComponent(query)}&nombre=20`;
-    const result = await fetchWithRetry(url, apiKey);
+    const u = new URL(`${API_BASE}/siret`);
+    u.searchParams.set("q", `denominationUniteLegale:${query}`);
+    u.searchParams.set("nombre", "20");
+    const result = await fetchWithRetry(u.toString(), apiKey);
     if (result.status === 404 || !result.data) return [];
     return filterActiveEtablissements(result.data);
 }
