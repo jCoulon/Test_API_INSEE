@@ -101,6 +101,8 @@
         .btn-warning { background: #e67e22; color: white; }
         .btn-warning:hover { background: #d35400; }
         .btn-warning:disabled { background: #bbb; cursor: not-allowed; }
+        .btn-danger { background: #c0392b; color: white; }
+        .btn-danger:hover { background: #a93226; }
 
         .toolbar {
             display: flex;
@@ -113,7 +115,7 @@
 
         .toolbar .stats { font-size: 0.85rem; color: #666; }
         .toolbar .stats strong { color: #0f3460; }
-        .export-btns { display: flex; gap: 0.5rem; }
+        .export-btns { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 
         table {
             width: 100%;
@@ -130,6 +132,7 @@
             border-bottom: 2px solid #e9ecef;
             position: sticky;
             top: 0;
+            z-index: 1;
         }
 
         tbody td {
@@ -153,6 +156,7 @@
         .badge-ok { background: #d4edda; color: #155724; }
         .badge-fixed { background: #fff3cd; color: #856404; }
         .badge-notfound { background: #f0f0f0; color: #888; }
+        .badge-apierror { background: #ffeef0; color: #c0392b; }
 
         .empty-state {
             text-align: center;
@@ -186,6 +190,7 @@
 
         .row-invalid { background: #fff5f5 !important; }
         .row-fixed { background: #f0fff4 !important; }
+        .row-apierror { background: #fff5f5 !important; }
 
         .drop-zone {
             border: 2px dashed #ccc;
@@ -227,6 +232,54 @@
             border-top: 2px solid #e9ecef;
             margin: 2rem 0;
         }
+
+        .filter-btns {
+            display: flex;
+            gap: 0.35rem;
+            flex-wrap: wrap;
+            margin-bottom: 0.75rem;
+        }
+
+        .filter-btns button {
+            padding: 0.3rem 0.7rem;
+            border: 1.5px solid #ddd;
+            border-radius: 6px;
+            background: white;
+            font-size: 0.78rem;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .filter-btns button.active {
+            background: #0f3460;
+            color: white;
+            border-color: #0f3460;
+        }
+
+        .filter-btns button:hover:not(.active) { border-color: #0f3460; color: #0f3460; }
+
+        .table-container {
+            overflow-y: auto;
+            max-height: 600px;
+            overflow-x: auto;
+        }
+
+        .import-log {
+            max-height: 150px;
+            overflow-y: auto;
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 0.5rem 0.75rem;
+            font-size: 0.75rem;
+            font-family: monospace;
+            color: #555;
+            margin-top: 0.5rem;
+            display: none;
+        }
+
+        .import-log .log-error { color: #c0392b; }
+        .import-log .log-ok { color: #27ae60; }
+        .import-log .log-warn { color: #e67e22; }
 
         @media (max-width: 600px) {
             .container { padding: 1rem; }
@@ -327,17 +380,16 @@
     <!-- Import results -->
     <div class="card" id="importCard" style="display:none;">
         <div class="toolbar">
-            <div class="stats">
-                <strong id="importTotal">0</strong> lignes import&eacute;es &mdash;
-                <span style="color:#c0392b;"><strong id="importInvalid">0</strong> SIREN invalide(s)</span>
-                <span id="importFixedStats" style="display:none;">
-                    &mdash; <span style="color:#27ae60;"><strong id="importFixed">0</strong> corrig&eacute;(s)</span>
-                    <span style="color:#888;"><strong id="importNotFound">0</strong> non trouv&eacute;(s)</span>
-                </span>
-            </div>
+            <div class="stats" id="importStats"></div>
             <div class="export-btns">
                 <button class="btn btn-warning" id="fixBtn" onclick="fixInvalidSirens()">
                     Corriger automatiquement
+                </button>
+                <button class="btn btn-info" id="retryBtn" onclick="retryErrors()" style="display:none;">
+                    Relancer les erreurs
+                </button>
+                <button class="btn btn-danger" id="stopBtn" onclick="stopCorrection()" style="display:none;">
+                    Stop
                 </button>
                 <button class="btn btn-success" id="exportFixedBtn" onclick="exportFixedExcel()">
                     Exporter le fichier corrig&eacute;
@@ -348,30 +400,93 @@
             <div class="fill" id="progressFill"></div>
         </div>
         <p id="progressText" style="font-size:0.8rem;color:#666;display:none;margin-bottom:0.5rem;"></p>
-        <div style="overflow-x:auto;">
+        <div class="import-log" id="importLog"></div>
+        <div class="filter-btns" id="filterBtns">
+            <button class="active" onclick="setFilter('all')">Tout</button>
+            <button onclick="setFilter('invalid')">Invalides</button>
+            <button onclick="setFilter('fixed')">Corrig&eacute;s</button>
+            <button onclick="setFilter('notfound')">Non trouv&eacute;s</button>
+            <button onclick="setFilter('apierror')">Erreurs API</button>
+            <button onclick="setFilter('ok')">OK</button>
+        </div>
+        <div class="table-container" id="importTableContainer">
             <table>
                 <thead id="importHead"></thead>
                 <tbody id="importBody"></tbody>
             </table>
         </div>
+        <p id="showingInfo" style="font-size:0.78rem;color:#999;margin-top:0.5rem;"></p>
     </div>
 </div>
 
 <script>
 const API_BASE = "https://api.insee.fr/api-sirene/3.11";
+const MAX_RETRIES = 3;
+const DISPLAY_LIMIT = 500; // Max rows displayed at once for performance
+
 let currentResults = [];
-let importedData = []; // [{headers, rows}]
+let importedData = [];
 let importHeaders = [];
-let colMap = {}; // {nom, siren, siret, cp, ville}
+let colMap = {};
+let currentFilter = "all";
+let correctionStopped = false;
 
 // Restore API key
 const savedKey = localStorage.getItem("insee_api_key");
 if (savedKey) document.getElementById("apiKey").value = savedKey;
 
-// Save API key on change
 document.getElementById("apiKey").addEventListener("change", () => {
     localStorage.setItem("insee_api_key", document.getElementById("apiKey").value.trim());
 });
+
+// ========== UTILITY ==========
+
+function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function log(msg, type) {
+    const logEl = document.getElementById("importLog");
+    logEl.style.display = "block";
+    const cls = type === "error" ? "log-error" : type === "ok" ? "log-ok" : type === "warn" ? "log-warn" : "";
+    logEl.innerHTML += `<div class="${cls}">${new Date().toLocaleTimeString()} - ${msg}</div>`;
+    logEl.scrollTop = logEl.scrollHeight;
+}
+
+// ========== API WITH RETRY ==========
+
+async function fetchWithRetry(url, apiKey, retries = MAX_RETRIES) {
+    for (let attempt = 1; attempt <= retries; attempt++) {
+        try {
+            const resp = await fetch(url, {
+                headers: { "X-INSEE-Api-Key-Integration": apiKey, "Accept": "application/json" }
+            });
+            if (resp.status === 401) throw new Error("AUTH_ERROR");
+            if (resp.status === 404) return { status: 404, data: null };
+            if (resp.status === 429 || resp.status >= 500) {
+                if (attempt < retries) {
+                    const wait = Math.min(1000 * Math.pow(2, attempt), 10000);
+                    log(`API ${resp.status} - tentative ${attempt}/${retries}, attente ${wait/1000}s...`, "warn");
+                    await delay(wait);
+                    continue;
+                }
+                throw new Error(`API_ERROR_${resp.status}`);
+            }
+            if (!resp.ok) throw new Error(`API_ERROR_${resp.status}`);
+            const data = await resp.json();
+            return { status: 200, data };
+        } catch (err) {
+            if (err.message === "AUTH_ERROR") throw err;
+            if (err.message.startsWith("API_ERROR_")) throw err;
+            // Network error
+            if (attempt < retries) {
+                const wait = Math.min(1000 * Math.pow(2, attempt), 10000);
+                log(`Erreur r\u00e9seau - tentative ${attempt}/${retries}, attente ${wait/1000}s...`, "warn");
+                await delay(wait);
+                continue;
+            }
+            throw new Error("NETWORK_ERROR");
+        }
+    }
+}
 
 // ========== SEARCH FUNCTIONS ==========
 
@@ -396,15 +511,7 @@ function parseEtablissement(etab) {
     };
 }
 
-async function searchByName(nom, apiKey) {
-    const url = `${API_BASE}/siret?q=denominationUniteLegale:"${encodeURIComponent(nom)}"&nombre=100`;
-    const resp = await fetch(url, {
-        headers: { "X-INSEE-Api-Key-Integration": apiKey, "Accept": "application/json" }
-    });
-    if (resp.status === 401) throw new Error("Cl\u00e9 API invalide ou expir\u00e9e (401).");
-    if (resp.status === 404) return [];
-    if (!resp.ok) throw new Error(`Erreur API : ${resp.status} ${resp.statusText}`);
-    const data = await resp.json();
+function filterActiveEtablissements(data) {
     return (data.etablissements || [])
         .filter(etab => {
             const periodes = etab.periodesEtablissement || [];
@@ -413,30 +520,26 @@ async function searchByName(nom, apiKey) {
         .map(parseEtablissement);
 }
 
+async function searchByName(nom, apiKey) {
+    const url = `${API_BASE}/siret?q=denominationUniteLegale:"${encodeURIComponent(nom)}"&nombre=100`;
+    const result = await fetchWithRetry(url, apiKey);
+    if (result.status === 404 || !result.data) return [];
+    return filterActiveEtablissements(result.data);
+}
+
+async function searchByNameRaw(query, apiKey) {
+    const url = `${API_BASE}/siret?q=denominationUniteLegale:${encodeURIComponent(query)}&nombre=20`;
+    const result = await fetchWithRetry(url, apiKey);
+    if (result.status === 404 || !result.data) return [];
+    return filterActiveEtablissements(result.data);
+}
+
 function simplifyName(nom) {
-    // Remove abbreviation dots, common abbreviations, punctuation
     let s = nom.toUpperCase();
     s = s.replace(/\b(RETR\.|RET\.|C\.E\.A\.|S\.A\.S\.|S\.A\.|S\.A\.R\.L\.|E\.U\.R\.L\.|SAS|SARL|SA)\b/g, "");
     s = s.replace(/[.\-\/,;:'"()]/g, " ");
     s = s.replace(/\s+/g, " ").trim();
     return s;
-}
-
-async function searchByNameRaw(query, apiKey) {
-    const url = `${API_BASE}/siret?q=denominationUniteLegale:${encodeURIComponent(query)}&nombre=20`;
-    const resp = await fetch(url, {
-        headers: { "X-INSEE-Api-Key-Integration": apiKey, "Accept": "application/json" }
-    });
-    if (resp.status === 401) throw new Error("Cl\u00e9 API invalide ou expir\u00e9e (401).");
-    if (resp.status === 404) return [];
-    if (!resp.ok) return [];
-    const data = await resp.json();
-    return (data.etablissements || [])
-        .filter(etab => {
-            const periodes = etab.periodesEtablissement || [];
-            return periodes.length > 0 && periodes[0].etatAdministratifEtablissement === "A";
-        })
-        .map(parseEtablissement);
 }
 
 async function smartSearchByName(nom, apiKey) {
@@ -453,15 +556,14 @@ async function smartSearchByName(nom, apiKey) {
         await delay(400);
     }
 
-    // Strategy 3: unquoted search (partial match, each word matched independently)
+    // Strategy 3: unquoted search (partial match)
     results = await searchByNameRaw(simplified, apiKey);
     if (results.length > 0) return results;
     await delay(400);
 
-    // Strategy 4: keep only significant words (3+ chars), search unquoted
+    // Strategy 4: significant words only
     const words = simplified.split(" ").filter(w => w.length >= 3);
     if (words.length > 1) {
-        // Try with the most significant words (skip generic ones)
         const generic = new Set(["LES", "DES", "DU", "DE", "LA", "LE", "ET", "EN", "AU", "AUX", "PAR", "SUR", "POUR"]);
         const significant = words.filter(w => !generic.has(w));
         if (significant.length > 0 && significant.join(" ") !== simplified) {
@@ -469,7 +571,6 @@ async function smartSearchByName(nom, apiKey) {
             if (results.length > 0) return results;
             await delay(400);
         }
-        // Try just the first significant word
         if (significant.length > 1) {
             results = await searchByNameRaw(significant[0], apiKey);
             if (results.length > 0) return results;
@@ -481,14 +582,9 @@ async function smartSearchByName(nom, apiKey) {
 
 async function searchBySiret(siret, apiKey) {
     const url = `${API_BASE}/siret/${siret}`;
-    const resp = await fetch(url, {
-        headers: { "X-INSEE-Api-Key-Integration": apiKey, "Accept": "application/json" }
-    });
-    if (resp.status === 401) throw new Error("Cl\u00e9 API invalide ou expir\u00e9e (401).");
-    if (resp.status === 404) return [];
-    if (!resp.ok) throw new Error(`Erreur API : ${resp.status} ${resp.statusText}`);
-    const data = await resp.json();
-    return data.etablissement ? [parseEtablissement(data.etablissement)] : [];
+    const result = await fetchWithRetry(url, apiKey);
+    if (result.status === 404 || !result.data) return [];
+    return result.data.etablissement ? [parseEtablissement(result.data.etablissement)] : [];
 }
 
 // ========== SEARCH FORM ==========
@@ -517,7 +613,6 @@ document.getElementById("searchForm").addEventListener("submit", async (e) => {
         if (siretInputVal.length > 0) {
             const sirets = siretInputVal.split(",").map(s => s.trim()).filter(s => s.length > 0);
             searchLabel = sirets.join(", ");
-            // Sequential with rate limiting to avoid 429
             for (let i = 0; i < sirets.length; i++) {
                 searchText.textContent = `Recherche ${i + 1}/${sirets.length}...`;
                 const res = await searchBySiret(sirets[i], apiKey);
@@ -536,7 +631,7 @@ document.getElementById("searchForm").addEventListener("submit", async (e) => {
         }
         renderResults(searchLabel);
     } catch (err) {
-        errorMsg.textContent = err.message;
+        errorMsg.textContent = err.message === "AUTH_ERROR" ? "Cl\u00e9 API invalide ou expir\u00e9e (401)." : err.message;
         errorMsg.style.display = "block";
     } finally {
         btn.disabled = false;
@@ -641,7 +736,6 @@ function detectColumns(headers) {
     const map = {};
     const h = headers.map(h => String(h || "").toUpperCase().trim());
 
-    // Collect all SIRET-matching columns to distinguish NIC from full SIRET
     const siretCols = [];
     for (let i = 0; i < h.length; i++) {
         if (h[i].includes("NOM") && !h[i].includes("PRENOM") && map.nom === undefined) map.nom = i;
@@ -652,7 +746,6 @@ function detectColumns(headers) {
         if ((h[i].includes("VILLE") || h[i].includes("COMMUNE")) && map.ville === undefined) map.ville = i;
         if (h[i].includes("ADRESSE") && map.adresse === undefined) map.adresse = i;
     }
-    // If 2+ SIRET columns: first = NIC (partial), last = full SIRET
     if (siretCols.length >= 2) {
         map.nic = siretCols[0];
         map.siret = siretCols[siretCols.length - 1];
@@ -686,7 +779,6 @@ function handleFile(file) {
                 const siren = row.cells[colMap.siren];
                 if (isSirenValid(siren)) {
                     row.status = "ok";
-                    // If NIC column exists and SIRET column is empty, build SIRET = SIREN + NIC
                     if (colMap.nic !== undefined && colMap.siret !== undefined) {
                         const nic = row.cells[colMap.nic].trim();
                         const siret = row.cells[colMap.siret].trim();
@@ -700,42 +792,79 @@ function handleFile(file) {
             }
         }
 
+        // Clear log
+        document.getElementById("importLog").innerHTML = "";
+        document.getElementById("importLog").style.display = "none";
+
+        currentFilter = "all";
         renderImportTable();
     };
     reader.readAsArrayBuffer(file);
 }
 
-function renderImportTable() {
-    const card = document.getElementById("importCard");
-    const thead = document.getElementById("importHead");
-    const tbody = document.getElementById("importBody");
+// ========== STATS & RENDER ==========
 
-    card.style.display = "block";
-
-    // Stats
+function getStats() {
     const total = importedData.length;
+    const ok = importedData.filter(r => r.status === "ok").length;
     const invalid = importedData.filter(r => r.status === "invalid").length;
     const fixed = importedData.filter(r => r.status === "fixed").length;
     const notfound = importedData.filter(r => r.status === "notfound").length;
+    const apierror = importedData.filter(r => r.status === "apierror").length;
+    return { total, ok, invalid, fixed, notfound, apierror };
+}
 
-    document.getElementById("importTotal").textContent = total;
-    document.getElementById("importInvalid").textContent = invalid;
+function updateStats() {
+    const s = getStats();
+    const parts = [`<strong>${s.total}</strong> lignes`];
+    if (s.ok > 0) parts.push(`<span style="color:#27ae60"><strong>${s.ok}</strong> OK</span>`);
+    if (s.invalid > 0) parts.push(`<span style="color:#c0392b"><strong>${s.invalid}</strong> invalide(s)</span>`);
+    if (s.fixed > 0) parts.push(`<span style="color:#856404"><strong>${s.fixed}</strong> corrig\u00e9(s)</span>`);
+    if (s.notfound > 0) parts.push(`<span style="color:#888"><strong>${s.notfound}</strong> non trouv\u00e9(s)</span>`);
+    if (s.apierror > 0) parts.push(`<span style="color:#c0392b"><strong>${s.apierror}</strong> erreur(s) API</span>`);
+    document.getElementById("importStats").innerHTML = parts.join(" &mdash; ");
 
-    if (fixed > 0 || notfound > 0) {
-        document.getElementById("importFixedStats").style.display = "inline";
-        document.getElementById("importFixed").textContent = fixed;
-        document.getElementById("importNotFound").textContent = notfound;
-    }
+    // Show/hide retry button
+    document.getElementById("retryBtn").style.display = s.apierror > 0 ? "inline-flex" : "none";
+}
+
+function setFilter(filter) {
+    currentFilter = filter;
+    document.querySelectorAll("#filterBtns button").forEach(b => b.classList.remove("active"));
+    document.querySelector(`#filterBtns button[onclick="setFilter('${filter}')"]`).classList.add("active");
+    renderImportTableBody();
+}
+
+function getFilteredRows() {
+    if (currentFilter === "all") return importedData;
+    return importedData.filter(r => r.status === currentFilter);
+}
+
+function renderImportTable() {
+    const card = document.getElementById("importCard");
+    const thead = document.getElementById("importHead");
+    card.style.display = "block";
+
+    updateStats();
 
     // Headers
     thead.innerHTML = `<tr>${importHeaders.map(h => `<th>${h}</th>`).join("")}<th>Statut</th></tr>`;
 
-    // Body
+    renderImportTableBody();
+}
+
+function renderImportTableBody() {
+    const tbody = document.getElementById("importBody");
+    const filtered = getFilteredRows();
+    const showing = Math.min(filtered.length, DISPLAY_LIMIT);
+
     tbody.innerHTML = "";
-    for (const row of importedData) {
+
+    for (let i = 0; i < showing; i++) {
+        const row = filtered[i];
         const tr = document.createElement("tr");
-        if (row.status === "invalid") tr.className = "row-invalid";
-        if (row.status === "fixed") tr.className = "row-fixed";
+        if (row.status === "invalid" || row.status === "apierror") tr.className = "row-invalid";
+        else if (row.status === "fixed") tr.className = "row-fixed";
 
         let statusBadge = "";
         switch (row.status) {
@@ -743,45 +872,66 @@ function renderImportTable() {
             case "invalid": statusBadge = `<span class="badge badge-error">Invalide</span>`; break;
             case "fixed": statusBadge = `<span class="badge badge-fixed">Corrig\u00e9</span>`; break;
             case "notfound": statusBadge = `<span class="badge badge-notfound">Non trouv\u00e9</span>`; break;
+            case "apierror": statusBadge = `<span class="badge badge-apierror">Erreur API</span>`; break;
             default: statusBadge = "";
         }
 
         tr.innerHTML = row.cells.map(c => `<td>${c}</td>`).join("") + `<td>${statusBadge}</td>`;
         tbody.appendChild(tr);
     }
+
+    const info = document.getElementById("showingInfo");
+    if (filtered.length > DISPLAY_LIMIT) {
+        info.textContent = `Affichage ${showing} / ${filtered.length} lignes (limit\u00e9 pour les performances). Utilisez les filtres pour voir les lignes sp\u00e9cifiques.`;
+    } else {
+        info.textContent = `${filtered.length} ligne(s) affich\u00e9e(s)`;
+    }
 }
 
 // ========== FIX INVALID SIRENS ==========
 
-function delay(ms) { return new Promise(r => setTimeout(r, ms)); }
+function stopCorrection() {
+    correctionStopped = true;
+}
 
-async function fixInvalidSirens() {
+async function fixRows(rowsToFix) {
     const apiKey = document.getElementById("apiKey").value.trim();
     if (!apiKey) { alert("Veuillez saisir votre cl\u00e9 API INSEE."); return; }
     if (colMap.nom === undefined) { alert("Colonne NOM non d\u00e9tect\u00e9e dans le fichier."); return; }
 
     localStorage.setItem("insee_api_key", apiKey);
+    correctionStopped = false;
 
-    const btn = document.getElementById("fixBtn");
-    btn.disabled = true;
-    btn.textContent = "Correction en cours...";
-
+    const fixBtn = document.getElementById("fixBtn");
+    const retryBtn = document.getElementById("retryBtn");
+    const stopBtn = document.getElementById("stopBtn");
     const progressBar = document.getElementById("progressBar");
     const progressFill = document.getElementById("progressFill");
     const progressText = document.getElementById("progressText");
+
+    fixBtn.disabled = true;
+    retryBtn.style.display = "none";
+    stopBtn.style.display = "inline-flex";
     progressBar.style.display = "block";
     progressText.style.display = "block";
+    progressFill.style.width = "0%";
 
-    const invalidRows = importedData.filter(r => r.status === "invalid");
     let processed = 0;
+    let fixedCount = 0;
+    let errorCount = 0;
 
-    for (const row of invalidRows) {
+    for (const row of rowsToFix) {
+        if (correctionStopped) {
+            log(`Correction arr\u00eat\u00e9e par l'utilisateur apr\u00e8s ${processed} lignes.`, "warn");
+            break;
+        }
+
         processed++;
-        const pct = Math.round((processed / invalidRows.length) * 100);
+        const pct = Math.round((processed / rowsToFix.length) * 100);
         progressFill.style.width = pct + "%";
-        progressText.textContent = `Traitement ${processed}/${invalidRows.length} : ${row.cells[colMap.nom]}...`;
-
         const nom = row.cells[colMap.nom];
+        progressText.textContent = `Traitement ${processed}/${rowsToFix.length} : ${nom}...`;
+
         const cp = colMap.cp !== undefined ? row.cells[colMap.cp] : "";
         const ville = colMap.ville !== undefined ? row.cells[colMap.ville] : "";
         const adresse = colMap.adresse !== undefined ? row.cells[colMap.adresse].toUpperCase() : "";
@@ -791,8 +941,9 @@ async function fixInvalidSirens() {
 
             if (results.length === 0) {
                 row.status = "notfound";
+                log(`${nom} : non trouv\u00e9`, "warn");
             } else {
-                // Score each result based on matching criteria
+                // Score each result
                 let best = null;
                 let bestScore = -1;
                 for (const r of results) {
@@ -801,7 +952,6 @@ async function fixInvalidSirens() {
                     if (ville && r.commune && r.commune.toUpperCase().includes(ville.toUpperCase())) score += 2;
                     if (adresse && r.adresse) {
                         const rAddr = r.adresse.toUpperCase();
-                        // Check if key words from the file address appear in the API address
                         const addrWords = adresse.split(/[\s,]+/).filter(w => w.length >= 3);
                         const matched = addrWords.filter(w => rAddr.includes(w)).length;
                         if (matched > 0) score += matched;
@@ -811,24 +961,53 @@ async function fixInvalidSirens() {
                 }
                 if (!best) best = results[0];
 
-                // Update cells
                 if (colMap.siren !== undefined) row.cells[colMap.siren] = best.siren;
-                if (colMap.nic !== undefined) row.cells[colMap.nic] = best.siret.slice(9); // NIC = 5 derniers chiffres
-                if (colMap.siret !== undefined) row.cells[colMap.siret] = best.siret; // SIRET complet
+                if (colMap.nic !== undefined) row.cells[colMap.nic] = best.siret.slice(9);
+                if (colMap.siret !== undefined) row.cells[colMap.siret] = best.siret;
                 row.status = "fixed";
+                fixedCount++;
+                log(`${nom} -> ${best.siret} (${best.denomination}, ${best.cp} ${best.commune})`, "ok");
             }
         } catch (err) {
-            console.error(`Erreur pour ${nom}:`, err);
-            row.status = "notfound";
+            if (err.message === "AUTH_ERROR") {
+                log("Cl\u00e9 API invalide ! Correction arr\u00eat\u00e9e.", "error");
+                break;
+            }
+            row.status = "apierror";
+            errorCount++;
+            log(`${nom} : erreur API (${err.message})`, "error");
         }
 
-        renderImportTable();
-        await delay(600); // Rate limiting
+        // Update stats every row, but only re-render table every 10 rows for perf
+        updateStats();
+        if (processed % 10 === 0 || processed === rowsToFix.length) {
+            renderImportTableBody();
+        }
+        await delay(600);
     }
 
-    progressText.textContent = `Termin\u00e9 ! ${importedData.filter(r => r.status === "fixed").length} corrig\u00e9(s), ${importedData.filter(r => r.status === "notfound").length} non trouv\u00e9(s).`;
-    btn.disabled = false;
-    btn.textContent = "Corriger automatiquement";
+    const s = getStats();
+    progressText.textContent = `Termin\u00e9 ! ${s.fixed} corrig\u00e9(s), ${s.notfound} non trouv\u00e9(s), ${s.apierror} erreur(s) API.`;
+    fixBtn.disabled = false;
+    fixBtn.textContent = "Corriger automatiquement";
+    stopBtn.style.display = "none";
+
+    updateStats();
+    renderImportTableBody();
+}
+
+async function fixInvalidSirens() {
+    const rows = importedData.filter(r => r.status === "invalid");
+    if (rows.length === 0) { alert("Aucune ligne invalide \u00e0 corriger."); return; }
+    document.getElementById("fixBtn").textContent = "Correction en cours...";
+    await fixRows(rows);
+}
+
+async function retryErrors() {
+    const rows = importedData.filter(r => r.status === "apierror");
+    if (rows.length === 0) return;
+    log(`Relance de ${rows.length} ligne(s) en erreur...`, "warn");
+    await fixRows(rows);
 }
 
 // ========== EXPORT FIXED EXCEL ==========
@@ -836,7 +1015,6 @@ async function fixInvalidSirens() {
 async function exportFixedExcel() {
     if (importedData.length === 0) return;
 
-    // If there are still invalid rows, run correction first
     const hasInvalid = importedData.some(r => r.status === "invalid");
     if (hasInvalid) {
         await fixInvalidSirens();
@@ -845,11 +1023,12 @@ async function exportFixedExcel() {
     const data = [importHeaders, ...importedData.map(r => r.cells)];
     const ws = XLSX.utils.aoa_to_sheet(data);
 
-    // Auto-size columns
     ws["!cols"] = importHeaders.map((_, i) => {
+        // Sample first 100 rows for column width (avoid iterating 30K rows)
+        const sample = importedData.slice(0, 100);
         const maxLen = Math.max(
             String(importHeaders[i]).length,
-            ...importedData.map(r => String(r.cells[i] || "").length)
+            ...sample.map(r => String(r.cells[i] || "").length)
         );
         return { wch: Math.min(maxLen + 2, 50) };
     });
