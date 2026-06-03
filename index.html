@@ -1,0 +1,460 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Recherche SIRET - Dashboard</title>
+    <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #f0f2f5;
+            color: #1a1a2e;
+            min-height: 100vh;
+        }
+
+        header {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            color: white;
+            padding: 1.5rem 2rem;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.15);
+        }
+
+        header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        header p {
+            font-size: 0.85rem;
+            opacity: 0.7;
+            margin-top: 0.25rem;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 2rem;
+        }
+
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+            margin-bottom: 1.5rem;
+        }
+
+        .card h2 {
+            font-size: 1rem;
+            font-weight: 600;
+            margin-bottom: 1rem;
+            color: #16213e;
+        }
+
+        .form-row {
+            display: flex;
+            gap: 1rem;
+            flex-wrap: wrap;
+            align-items: flex-end;
+        }
+
+        .form-group {
+            display: flex;
+            flex-direction: column;
+            gap: 0.35rem;
+        }
+
+        .form-group label {
+            font-size: 0.8rem;
+            font-weight: 500;
+            color: #555;
+        }
+
+        .form-group input {
+            padding: 0.6rem 0.8rem;
+            border: 1.5px solid #ddd;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            transition: border-color 0.2s;
+            outline: none;
+        }
+
+        .form-group input:focus {
+            border-color: #0f3460;
+        }
+
+        .form-group.api-key { flex: 1; min-width: 250px; }
+        .form-group.search { flex: 2; min-width: 200px; }
+
+        .btn {
+            padding: 0.6rem 1.2rem;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+        }
+
+        .btn-primary {
+            background: #0f3460;
+            color: white;
+        }
+
+        .btn-primary:hover { background: #1a4a7a; }
+        .btn-primary:disabled { background: #999; cursor: not-allowed; }
+
+        .btn-success { background: #27ae60; color: white; }
+        .btn-success:hover { background: #219a52; }
+
+        .btn-info { background: #2980b9; color: white; }
+        .btn-info:hover { background: #2472a4; }
+
+        .toolbar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.75rem;
+            margin-bottom: 1rem;
+        }
+
+        .toolbar .stats {
+            font-size: 0.85rem;
+            color: #666;
+        }
+
+        .toolbar .stats strong {
+            color: #0f3460;
+        }
+
+        .export-btns {
+            display: flex;
+            gap: 0.5rem;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 0.85rem;
+        }
+
+        thead th {
+            background: #f8f9fa;
+            padding: 0.75rem;
+            text-align: left;
+            font-weight: 600;
+            color: #444;
+            border-bottom: 2px solid #e9ecef;
+            position: sticky;
+            top: 0;
+        }
+
+        tbody td {
+            padding: 0.65rem 0.75rem;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        tbody tr:hover { background: #f8f9ff; }
+
+        .badge {
+            display: inline-block;
+            padding: 0.15rem 0.5rem;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 500;
+        }
+
+        .badge-yes { background: #d4edda; color: #155724; }
+        .badge-no { background: #f0f0f0; color: #888; }
+
+        .empty-state {
+            text-align: center;
+            padding: 3rem;
+            color: #999;
+        }
+
+        .empty-state p { margin-top: 0.5rem; font-size: 0.9rem; }
+
+        .spinner {
+            display: none;
+            width: 20px;
+            height: 20px;
+            border: 2.5px solid #ddd;
+            border-top-color: #0f3460;
+            border-radius: 50%;
+            animation: spin 0.7s linear infinite;
+        }
+
+        @keyframes spin { to { transform: rotate(360deg); } }
+
+        .error-msg {
+            background: #ffeef0;
+            color: #c0392b;
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            margin-bottom: 1rem;
+            display: none;
+        }
+
+        @media (max-width: 600px) {
+            .container { padding: 1rem; }
+            .form-row { flex-direction: column; }
+            table { font-size: 0.78rem; }
+            thead th, tbody td { padding: 0.5rem; }
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <h1>Recherche SIRET</h1>
+    <p>API SIRENE - INSEE</p>
+</header>
+
+<div class="container">
+    <div class="card">
+        <h2>Recherche</h2>
+        <form id="searchForm" class="form-row">
+            <div class="form-group api-key">
+                <label for="apiKey">Cl&eacute; API INSEE</label>
+                <input type="password" id="apiKey" placeholder="Votre cl&eacute; API" required>
+            </div>
+            <div class="form-group search">
+                <label for="companyName">Nom de l'entreprise</label>
+                <input type="text" id="companyName" placeholder="Ex: ORONA, ENGIE..." required>
+            </div>
+            <button type="submit" class="btn btn-primary" id="searchBtn">
+                <span id="searchText">Rechercher</span>
+                <div class="spinner" id="spinner"></div>
+            </button>
+        </form>
+    </div>
+
+    <div class="error-msg" id="errorMsg"></div>
+
+    <div class="card" id="resultsCard" style="display:none;">
+        <div class="toolbar">
+            <div class="stats">
+                <strong id="resultCount">0</strong> &eacute;tablissement(s) actif(s) trouv&eacute;(s)
+                pour <strong id="searchedName"></strong>
+            </div>
+            <div class="export-btns">
+                <button class="btn btn-success" onclick="exportCSV()">Export CSV</button>
+                <button class="btn btn-info" onclick="exportExcel()">Export Excel</button>
+            </div>
+        </div>
+
+        <div style="overflow-x:auto;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>SIREN</th>
+                        <th>SIRET</th>
+                        <th>D&eacute;nomination</th>
+                        <th>Adresse</th>
+                        <th>Si&egrave;ge</th>
+                    </tr>
+                </thead>
+                <tbody id="resultsBody"></tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="card empty-state" id="emptyState">
+        <p><strong>Aucune recherche</strong></p>
+        <p>Saisissez un nom d'entreprise pour afficher les r&eacute;sultats.</p>
+    </div>
+</div>
+
+<script>
+const API_BASE = "https://api.insee.fr/api-sirene/3.11";
+let currentResults = [];
+
+// Restore API key from localStorage
+const savedKey = localStorage.getItem("insee_api_key");
+if (savedKey) document.getElementById("apiKey").value = savedKey;
+
+document.getElementById("searchForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const apiKey = document.getElementById("apiKey").value.trim();
+    const nom = document.getElementById("companyName").value.trim().toUpperCase();
+
+    if (!apiKey || !nom) return;
+
+    // Save API key
+    localStorage.setItem("insee_api_key", apiKey);
+
+    // UI loading state
+    const btn = document.getElementById("searchBtn");
+    const spinner = document.getElementById("spinner");
+    const searchText = document.getElementById("searchText");
+    const errorMsg = document.getElementById("errorMsg");
+
+    btn.disabled = true;
+    spinner.style.display = "inline-block";
+    searchText.textContent = "Recherche...";
+    errorMsg.style.display = "none";
+
+    try {
+        const url = `${API_BASE}/siret?q=denominationUniteLegale:${encodeURIComponent(nom)}&nombre=100`;
+        const resp = await fetch(url, {
+            headers: {
+                "X-INSEE-Api-Key-Integration": apiKey,
+                "Accept": "application/json"
+            }
+        });
+
+        if (resp.status === 401) {
+            throw new Error("Cl\u00e9 API invalide ou expir\u00e9e (401).");
+        }
+        if (resp.status === 404) {
+            currentResults = [];
+            renderResults(nom);
+            return;
+        }
+        if (!resp.ok) {
+            throw new Error(`Erreur API : ${resp.status} ${resp.statusText}`);
+        }
+
+        const data = await resp.json();
+        const etablissements = data.etablissements || [];
+
+        // Filter active establishments
+        currentResults = etablissements
+            .filter(etab => {
+                const periodes = etab.periodesEtablissement || [];
+                return periodes.length > 0 &&
+                       periodes[0].etatAdministratifEtablissement === "A";
+            })
+            .map(etab => {
+                const addr = etab.adresseEtablissement || {};
+                const unite = etab.uniteLegale || {};
+
+                const numero = addr.numeroVoieEtablissement || "";
+                const typeVoie = addr.typeVoieEtablissement || "";
+                const libVoie = addr.libelleVoieEtablissement || "";
+                const cp = addr.codePostalEtablissement || "";
+                const commune = addr.libelleCommuneEtablissement || "";
+
+                let adresse = `${numero} ${typeVoie} ${libVoie}`.trim();
+                adresse = `${adresse}, ${cp} ${commune}`.replace(/^,\s*/, "").replace(/,\s*$/, "");
+
+                return {
+                    siren: etab.siren || "",
+                    siret: etab.siret || "",
+                    denomination: unite.denominationUniteLegale || "",
+                    adresse: adresse,
+                    siege: etab.etablissementSiege || false
+                };
+            });
+
+        renderResults(nom);
+
+    } catch (err) {
+        errorMsg.textContent = err.message;
+        errorMsg.style.display = "block";
+    } finally {
+        btn.disabled = false;
+        spinner.style.display = "none";
+        searchText.textContent = "Rechercher";
+    }
+});
+
+function renderResults(nom) {
+    const tbody = document.getElementById("resultsBody");
+    const resultsCard = document.getElementById("resultsCard");
+    const emptyState = document.getElementById("emptyState");
+
+    document.getElementById("resultCount").textContent = currentResults.length;
+    document.getElementById("searchedName").textContent = nom;
+
+    tbody.innerHTML = "";
+
+    if (currentResults.length === 0) {
+        resultsCard.style.display = "none";
+        emptyState.innerHTML = `<p><strong>Aucun r\u00e9sultat</strong></p>
+            <p>Aucun \u00e9tablissement actif trouv\u00e9 pour "${nom}".</p>`;
+        emptyState.style.display = "block";
+        return;
+    }
+
+    emptyState.style.display = "none";
+    resultsCard.style.display = "block";
+
+    for (const r of currentResults) {
+        const tr = document.createElement("tr");
+        const siegeBadge = r.siege
+            ? `<span class="badge badge-yes">Oui</span>`
+            : `<span class="badge badge-no">Non</span>`;
+
+        tr.innerHTML = `
+            <td>${r.siren}</td>
+            <td>${r.siret}</td>
+            <td>${r.denomination}</td>
+            <td>${r.adresse}</td>
+            <td>${siegeBadge}</td>
+        `;
+        tbody.appendChild(tr);
+    }
+}
+
+function exportCSV() {
+    if (currentResults.length === 0) return;
+
+    const headers = ["SIREN", "SIRET", "Denomination", "Adresse", "Siege"];
+    const rows = currentResults.map(r => [
+        r.siren,
+        r.siret,
+        `"${r.denomination.replace(/"/g, '""')}"`,
+        `"${r.adresse.replace(/"/g, '""')}"`,
+        r.siege ? "Oui" : "Non"
+    ]);
+
+    const csv = [headers.join(";"), ...rows.map(r => r.join(";"))].join("\n");
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    downloadBlob(blob, `siret_${document.getElementById("searchedName").textContent}.csv`);
+}
+
+function exportExcel() {
+    if (currentResults.length === 0) return;
+
+    const data = currentResults.map(r => ({
+        "SIREN": r.siren,
+        "SIRET": r.siret,
+        "D\u00e9nomination": r.denomination,
+        "Adresse": r.adresse,
+        "Si\u00e8ge": r.siege ? "Oui" : "Non"
+    }));
+
+    const ws = XLSX.utils.json_to_sheet(data);
+
+    // Auto-size columns
+    ws["!cols"] = [
+        { wch: 12 }, { wch: 16 }, { wch: 25 }, { wch: 50 }, { wch: 8 }
+    ];
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "R\u00e9sultats");
+    XLSX.writeFile(wb, `siret_${document.getElementById("searchedName").textContent}.xlsx`);
+}
+
+function downloadBlob(blob, filename) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+}
+</script>
+
+</body>
+</html>
