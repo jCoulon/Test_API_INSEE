@@ -228,12 +228,12 @@
                 <input type="password" id="apiKey" placeholder="Votre cl&eacute; API" required>
             </div>
             <div class="form-group search">
-                <label for="companyName">Nom de l'entreprise</label>
-                <input type="text" id="companyName" placeholder="Ex: ORONA, ENGIE...">
+                <label for="companyName">Nom(s) d'entreprise (s&eacute;par&eacute;s par des virgules)</label>
+                <input type="text" id="companyName" placeholder="Ex: ORONA, ENGIE, AIR FRANCE">
             </div>
-            <div class="form-group">
-                <label for="siretInput">ou SIRET (14 chiffres)</label>
-                <input type="text" id="siretInput" placeholder="Ex: 43024385700116" maxlength="14">
+            <div class="form-group search">
+                <label for="siretInput">ou SIRET(s) (s&eacute;par&eacute;s par des virgules)</label>
+                <input type="text" id="siretInput" placeholder="Ex: 43024385700116, 30669069400139">
             </div>
             <button type="submit" class="btn btn-primary" id="searchBtn">
                 <span id="searchText">Rechercher</span>
@@ -286,13 +286,68 @@ let currentResults = [];
 const savedKey = localStorage.getItem("insee_api_key");
 if (savedKey) document.getElementById("apiKey").value = savedKey;
 
+function parseEtablissement(etab) {
+    const addr = etab.adresseEtablissement || {};
+    const unite = etab.uniteLegale || {};
+
+    const numero = addr.numeroVoieEtablissement || "";
+    const typeVoie = addr.typeVoieEtablissement || "";
+    const libVoie = addr.libelleVoieEtablissement || "";
+    const cp = addr.codePostalEtablissement || "";
+    const commune = addr.libelleCommuneEtablissement || "";
+
+    let adresse = `${numero} ${typeVoie} ${libVoie}`.trim();
+    adresse = `${adresse}, ${cp} ${commune}`.replace(/^,\s*/, "").replace(/,\s*$/, "");
+
+    return {
+        siren: etab.siren || "",
+        siret: etab.siret || "",
+        denomination: unite.denominationUniteLegale || "",
+        adresse: adresse,
+        siege: etab.etablissementSiege || false
+    };
+}
+
+async function searchByName(nom, apiKey) {
+    const url = `${API_BASE}/siret?q=denominationUniteLegale:"${encodeURIComponent(nom)}"&nombre=100`;
+    const resp = await fetch(url, {
+        headers: { "X-INSEE-Api-Key-Integration": apiKey, "Accept": "application/json" }
+    });
+
+    if (resp.status === 401) throw new Error("Cl\u00e9 API invalide ou expir\u00e9e (401).");
+    if (resp.status === 404) return [];
+    if (!resp.ok) throw new Error(`Erreur API : ${resp.status} ${resp.statusText}`);
+
+    const data = await resp.json();
+    return (data.etablissements || [])
+        .filter(etab => {
+            const periodes = etab.periodesEtablissement || [];
+            return periodes.length > 0 && periodes[0].etatAdministratifEtablissement === "A";
+        })
+        .map(parseEtablissement);
+}
+
+async function searchBySiret(siret, apiKey) {
+    const url = `${API_BASE}/siret/${siret}`;
+    const resp = await fetch(url, {
+        headers: { "X-INSEE-Api-Key-Integration": apiKey, "Accept": "application/json" }
+    });
+
+    if (resp.status === 401) throw new Error("Cl\u00e9 API invalide ou expir\u00e9e (401).");
+    if (resp.status === 404) return [];
+    if (!resp.ok) throw new Error(`Erreur API : ${resp.status} ${resp.statusText}`);
+
+    const data = await resp.json();
+    return data.etablissement ? [parseEtablissement(data.etablissement)] : [];
+}
+
 document.getElementById("searchForm").addEventListener("submit", async (e) => {
     e.preventDefault();
     const apiKey = document.getElementById("apiKey").value.trim();
-    const nom = document.getElementById("companyName").value.trim().toUpperCase();
-    const siretInput = document.getElementById("siretInput").value.trim();
+    const nomInput = document.getElementById("companyName").value.trim().toUpperCase();
+    const siretInputVal = document.getElementById("siretInput").value.trim();
 
-    if (!apiKey || (!nom && !siretInput)) return;
+    if (!apiKey || (!nomInput && !siretInputVal)) return;
 
     // Save API key
     localStorage.setItem("insee_api_key", apiKey);
@@ -309,74 +364,20 @@ document.getElementById("searchForm").addEventListener("submit", async (e) => {
     errorMsg.style.display = "none";
 
     try {
-        const searchBySiret = siretInput.length > 0;
-        const searchLabel = searchBySiret ? `SIRET ${siretInput}` : nom;
-        let url;
+        currentResults = [];
+        let searchLabel = "";
 
-        if (searchBySiret) {
-            url = `${API_BASE}/siret/${siretInput}`;
+        if (siretInputVal.length > 0) {
+            const sirets = siretInputVal.split(",").map(s => s.trim()).filter(s => s.length > 0);
+            searchLabel = sirets.join(", ");
+            const results = await Promise.all(sirets.map(s => searchBySiret(s, apiKey)));
+            currentResults = results.flat();
         } else {
-            url = `${API_BASE}/siret?q=denominationUniteLegale:"${encodeURIComponent(nom)}"&nombre=100`;
+            const noms = nomInput.split(",").map(s => s.trim()).filter(s => s.length > 0);
+            searchLabel = noms.join(", ");
+            const results = await Promise.all(noms.map(n => searchByName(n, apiKey)));
+            currentResults = results.flat();
         }
-
-        const resp = await fetch(url, {
-            headers: {
-                "X-INSEE-Api-Key-Integration": apiKey,
-                "Accept": "application/json"
-            }
-        });
-
-        if (resp.status === 401) {
-            throw new Error("Cl\u00e9 API invalide ou expir\u00e9e (401).");
-        }
-        if (resp.status === 404) {
-            currentResults = [];
-            renderResults(searchLabel);
-            return;
-        }
-        if (!resp.ok) {
-            throw new Error(`Erreur API : ${resp.status} ${resp.statusText}`);
-        }
-
-        const data = await resp.json();
-        let etablissements;
-
-        if (searchBySiret) {
-            // Single result from /siret/{siret}
-            etablissements = data.etablissement ? [data.etablissement] : [];
-        } else {
-            etablissements = data.etablissements || [];
-        }
-
-        // Filter active establishments (skip filter for direct SIRET lookup)
-        currentResults = etablissements
-            .filter(etab => {
-                if (searchBySiret) return true;
-                const periodes = etab.periodesEtablissement || [];
-                return periodes.length > 0 &&
-                       periodes[0].etatAdministratifEtablissement === "A";
-            })
-            .map(etab => {
-                const addr = etab.adresseEtablissement || {};
-                const unite = etab.uniteLegale || {};
-
-                const numero = addr.numeroVoieEtablissement || "";
-                const typeVoie = addr.typeVoieEtablissement || "";
-                const libVoie = addr.libelleVoieEtablissement || "";
-                const cp = addr.codePostalEtablissement || "";
-                const commune = addr.libelleCommuneEtablissement || "";
-
-                let adresse = `${numero} ${typeVoie} ${libVoie}`.trim();
-                adresse = `${adresse}, ${cp} ${commune}`.replace(/^,\s*/, "").replace(/,\s*$/, "");
-
-                return {
-                    siren: etab.siren || "",
-                    siret: etab.siret || "",
-                    denomination: unite.denominationUniteLegale || "",
-                    adresse: adresse,
-                    siege: etab.etablissementSiege || false
-                };
-            });
 
         renderResults(searchLabel);
 
