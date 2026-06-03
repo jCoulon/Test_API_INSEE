@@ -757,6 +757,7 @@ async function fixInvalidSirens() {
         const nom = row.cells[colMap.nom];
         const cp = colMap.cp !== undefined ? row.cells[colMap.cp] : "";
         const ville = colMap.ville !== undefined ? row.cells[colMap.ville] : "";
+        const adresse = colMap.adresse !== undefined ? row.cells[colMap.adresse].toUpperCase() : "";
 
         try {
             const results = await smartSearchByName(nom, apiKey);
@@ -764,19 +765,24 @@ async function fixInvalidSirens() {
             if (results.length === 0) {
                 row.status = "notfound";
             } else {
-                // Try to match by CP or ville
+                // Score each result based on matching criteria
                 let best = null;
+                let bestScore = -1;
                 for (const r of results) {
-                    if ((cp && r.cp === cp) || (ville && r.commune && r.commune.toUpperCase().includes(ville.toUpperCase()))) {
-                        best = r;
-                        break;
+                    let score = 0;
+                    if (cp && r.cp === cp) score += 3;
+                    if (ville && r.commune && r.commune.toUpperCase().includes(ville.toUpperCase())) score += 2;
+                    if (adresse && r.adresse) {
+                        const rAddr = r.adresse.toUpperCase();
+                        // Check if key words from the file address appear in the API address
+                        const addrWords = adresse.split(/[\s,]+/).filter(w => w.length >= 3);
+                        const matched = addrWords.filter(w => rAddr.includes(w)).length;
+                        if (matched > 0) score += matched;
                     }
+                    if (r.siege) score += 0.5;
+                    if (score > bestScore) { bestScore = score; best = r; }
                 }
-                // Fallback: siege or first result
-                if (!best) {
-                    const sieges = results.filter(r => r.siege);
-                    best = sieges.length > 0 ? sieges[0] : results[0];
-                }
+                if (!best) best = results[0];
 
                 // Update cells
                 if (colMap.siren !== undefined) row.cells[colMap.siren] = best.siren;
