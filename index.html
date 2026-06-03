@@ -281,6 +281,51 @@
         .import-log .log-ok { color: #27ae60; }
         .import-log .log-warn { color: #e67e22; }
 
+        .badge-review { background: #e8daef; color: #6c3483; }
+        .row-review { background: #faf5ff !important; }
+
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5);
+            z-index: 100;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal-overlay.active { display: flex; }
+
+        .modal {
+            background: white;
+            border-radius: 12px;
+            padding: 1.5rem;
+            max-width: 900px;
+            width: 95%;
+            max-height: 80vh;
+            overflow-y: auto;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+        }
+
+        .modal h3 { font-size: 1rem; margin-bottom: 0.5rem; color: #16213e; }
+        .modal .info { font-size: 0.82rem; color: #666; margin-bottom: 1rem; }
+
+        .modal table { margin-bottom: 1rem; }
+
+        .modal tbody tr {
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+
+        .modal tbody tr:hover { background: #e8f4fd !important; }
+        .modal tbody tr.selected { background: #d4edda !important; }
+
+        .modal-actions {
+            display: flex;
+            gap: 0.5rem;
+            justify-content: flex-end;
+        }
+
         @media (max-width: 600px) {
             .container { padding: 1rem; }
             .form-row { flex-direction: column; }
@@ -412,6 +457,7 @@
             <button onclick="setFilter('notfound')">Non trouv&eacute;s</button>
             <button onclick="setFilter('apierror')">Erreurs API</button>
             <button onclick="setFilter('ok')">OK</button>
+            <button onclick="setFilter('review')">A v&eacute;rifier</button>
         </div>
         <div class="table-container" id="importTableContainer">
             <table>
@@ -420,6 +466,33 @@
             </table>
         </div>
         <p id="showingInfo" style="font-size:0.78rem;color:#999;margin-top:0.5rem;"></p>
+    </div>
+<!-- Selection modal -->
+<div class="modal-overlay" id="modalOverlay">
+    <div class="modal">
+        <h3 id="modalTitle"></h3>
+        <p class="info" id="modalInfo"></p>
+        <div class="table-container" style="max-height:50vh;">
+            <table>
+                <thead>
+                    <tr>
+                        <th>SIREN</th>
+                        <th>SIRET</th>
+                        <th>D&eacute;nomination</th>
+                        <th>Adresse</th>
+                        <th>CP</th>
+                        <th>Ville</th>
+                        <th>Score</th>
+                    </tr>
+                </thead>
+                <tbody id="modalBody"></tbody>
+            </table>
+        </div>
+        <div class="modal-actions">
+            <button class="btn btn-primary" id="modalConfirmBtn" disabled onclick="confirmModalSelection()">Appliquer</button>
+            <button class="btn" style="background:#eee;color:#333;" onclick="skipModalSelection()">Passer</button>
+            <button class="btn btn-danger" id="modalSkipAllBtn" onclick="skipAllModalSelections()">Tout passer</button>
+        </div>
     </div>
 </div>
 
@@ -872,7 +945,8 @@ function getStats() {
     const fixed = importedData.filter(r => r.status === "fixed").length;
     const notfound = importedData.filter(r => r.status === "notfound").length;
     const apierror = importedData.filter(r => r.status === "apierror").length;
-    return { total, ok, invalid, fixed, notfound, apierror };
+    const review = importedData.filter(r => r.status === "review").length;
+    return { total, ok, invalid, fixed, notfound, apierror, review };
 }
 
 function updateStats() {
@@ -883,6 +957,7 @@ function updateStats() {
     if (s.fixed > 0) parts.push(`<span style="color:#856404"><strong>${s.fixed}</strong> corrig\u00e9(s)</span>`);
     if (s.notfound > 0) parts.push(`<span style="color:#888"><strong>${s.notfound}</strong> non trouv\u00e9(s)</span>`);
     if (s.apierror > 0) parts.push(`<span style="color:#c0392b"><strong>${s.apierror}</strong> erreur(s) API</span>`);
+    if (s.review > 0) parts.push(`<span style="color:#6c3483"><strong>${s.review}</strong> &agrave; v&eacute;rifier</span>`);
     document.getElementById("importStats").innerHTML = parts.join(" &mdash; ");
 
     // Show/hide retry button
@@ -926,6 +1001,7 @@ function renderImportTableBody() {
         const tr = document.createElement("tr");
         if (row.status === "invalid" || row.status === "apierror") tr.className = "row-invalid";
         else if (row.status === "fixed") tr.className = "row-fixed";
+        else if (row.status === "review") tr.className = "row-review";
 
         let statusBadge = "";
         switch (row.status) {
@@ -934,10 +1010,16 @@ function renderImportTableBody() {
             case "fixed": statusBadge = `<span class="badge badge-fixed">Corrig\u00e9</span>`; break;
             case "notfound": statusBadge = `<span class="badge badge-notfound">Non trouv\u00e9</span>`; break;
             case "apierror": statusBadge = `<span class="badge badge-apierror">Erreur API</span>`; break;
+            case "review": statusBadge = `<span class="badge badge-review">A v&eacute;rifier</span>`; break;
             default: statusBadge = "";
         }
 
         tr.innerHTML = row.cells.map(c => `<td>${c}</td>`).join("") + `<td>${statusBadge}</td>`;
+        if (row.status === "review" && row.candidates) {
+            tr.style.cursor = "pointer";
+            tr.title = "Cliquer pour choisir parmi les candidats";
+            tr.addEventListener("click", () => showSelectionModal(row));
+        }
         tbody.appendChild(tr);
     }
 
@@ -1043,8 +1125,25 @@ async function fixRows(rowsToFix) {
                     fixedCount++;
                     log(`${nom} -> ${best.siret} (${best.denomination}, ${best.cp} ${best.commune}) [score:${bestScore}]`, "ok");
                 } else {
-                    row.status = "notfound";
-                    log(`${nom} : meilleur candidat: ${best.denomination}, ${best.cp} ${best.commune} [score:${bestScore}] - pas assez fiable`, "warn");
+                    // Store candidates with scores for manual review
+                    row.candidates = results.map(r => {
+                        let sc = 0;
+                        const rCp2 = (r.cp || "").padStart(5, "0");
+                        if (cp && rCp2 === cp) sc += 3;
+                        if (ville && r.commune) {
+                            const rv = r.commune.toUpperCase();
+                            if (rv.includes(ville) || ville.includes(rv)) sc += 2;
+                        }
+                        if (adresse && r.adresse) {
+                            const ra = r.adresse.toUpperCase();
+                            const aw = adresse.split(/[\s,]+/).filter(w => w.length >= 3);
+                            sc += aw.filter(w => ra.includes(w)).length;
+                        }
+                        if (r.siege) sc += 0.5;
+                        return { ...r, score: sc };
+                    }).sort((a, b) => b.score - a.score).slice(0, 20);
+                    row.status = "review";
+                    log(`${nom} : ${results.length} candidat(s) - s\u00e9lection manuelle requise [meilleur score:${bestScore}]`, "warn");
                 }
             }
         } catch (err) {
@@ -1066,13 +1165,22 @@ async function fixRows(rowsToFix) {
     }
 
     const s = getStats();
-    progressText.textContent = `Termin\u00e9 ! ${s.fixed} corrig\u00e9(s), ${s.notfound} non trouv\u00e9(s), ${s.apierror} erreur(s) API.`;
+    progressText.textContent = `Termin\u00e9 ! ${s.fixed} corrig\u00e9(s), ${s.notfound} non trouv\u00e9(s), ${s.apierror} erreur(s) API` +
+        (s.review > 0 ? `, ${s.review} \u00e0 v\u00e9rifier.` : ".");
     fixBtn.disabled = false;
     fixBtn.textContent = "Corriger automatiquement";
     stopBtn.style.display = "none";
 
     updateStats();
     renderImportTableBody();
+
+    // Auto-open review modal for rows needing manual selection
+    if (s.review > 0 && !correctionStopped) {
+        const reviewRows = importedData.filter(r => r.status === "review");
+        log(`${reviewRows.length} ligne(s) n\u00e9cessitent une s\u00e9lection manuelle. Cliquez sur les lignes violettes ou utilisez le filtre "A v\u00e9rifier".`, "warn");
+        // Auto-open first review row
+        showSelectionModal(reviewRows[0]);
+    }
 }
 
 async function fixInvalidSirens() {
@@ -1089,6 +1197,110 @@ async function retryErrors() {
     await fixRows(rows);
 }
 
+// ========== MANUAL SELECTION MODAL ==========
+
+let currentModalRow = null;
+let selectedCandidate = null;
+let skipAllReviews = false;
+
+function showSelectionModal(row) {
+    currentModalRow = row;
+    selectedCandidate = null;
+    skipAllReviews = false;
+
+    const nom = colMap.nom !== undefined ? row.cells[colMap.nom] : "?";
+    const cp = colMap.cp !== undefined ? row.cells[colMap.cp] : "";
+    const ville = colMap.ville !== undefined ? row.cells[colMap.ville] : "";
+
+    document.getElementById("modalTitle").textContent = `S\u00e9lection pour : ${nom}`;
+    document.getElementById("modalInfo").textContent = `Fichier : CP ${cp}, Ville ${ville}. Choisissez le bon \u00e9tablissement ou passez.`;
+
+    const tbody = document.getElementById("modalBody");
+    tbody.innerHTML = "";
+
+    const candidates = row.candidates || [];
+    for (let i = 0; i < candidates.length; i++) {
+        const c = candidates[i];
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+            <td>${c.siren}</td>
+            <td>${c.siret}</td>
+            <td>${c.denomination}</td>
+            <td>${c.adresse}</td>
+            <td>${c.cp}</td>
+            <td>${c.commune}</td>
+            <td>${c.score}</td>
+        `;
+        tr.addEventListener("click", () => {
+            // Deselect all
+            tbody.querySelectorAll("tr").forEach(r => r.classList.remove("selected"));
+            tr.classList.add("selected");
+            selectedCandidate = c;
+            document.getElementById("modalConfirmBtn").disabled = false;
+        });
+        tbody.appendChild(tr);
+    }
+
+    document.getElementById("modalConfirmBtn").disabled = true;
+    document.getElementById("modalOverlay").classList.add("active");
+
+    // Count remaining reviews
+    const remaining = importedData.filter(r => r.status === "review").length;
+    document.getElementById("modalSkipAllBtn").textContent = `Tout passer (${remaining})`;
+}
+
+function confirmModalSelection() {
+    if (!currentModalRow || !selectedCandidate) return;
+
+    if (colMap.siren !== undefined) currentModalRow.cells[colMap.siren] = selectedCandidate.siren;
+    if (colMap.nic !== undefined) currentModalRow.cells[colMap.nic] = selectedCandidate.siret.slice(9);
+    if (colMap.siret !== undefined) currentModalRow.cells[colMap.siret] = selectedCandidate.siret;
+    currentModalRow.status = "fixed";
+    delete currentModalRow.candidates;
+
+    log(`Manuel : ${colMap.nom !== undefined ? currentModalRow.cells[colMap.nom] : "?"} -> ${selectedCandidate.siret} (${selectedCandidate.denomination})`, "ok");
+
+    closeModalAndNext();
+}
+
+function skipModalSelection() {
+    if (!currentModalRow) return;
+    currentModalRow.status = "notfound";
+    delete currentModalRow.candidates;
+    closeModalAndNext();
+}
+
+function skipAllModalSelections() {
+    document.getElementById("modalOverlay").classList.remove("active");
+    skipAllReviews = true;
+    for (const row of importedData) {
+        if (row.status === "review") {
+            row.status = "notfound";
+            delete row.candidates;
+        }
+    }
+    currentModalRow = null;
+    updateStats();
+    renderImportTableBody();
+}
+
+function closeModalAndNext() {
+    document.getElementById("modalOverlay").classList.remove("active");
+    currentModalRow = null;
+    selectedCandidate = null;
+
+    updateStats();
+    renderImportTableBody();
+
+    // Auto-open next review row
+    if (!skipAllReviews) {
+        const next = importedData.find(r => r.status === "review");
+        if (next) {
+            setTimeout(() => showSelectionModal(next), 300);
+        }
+    }
+}
+
 // ========== EXPORT FIXED EXCEL ==========
 
 async function exportFixedExcel() {
@@ -1098,6 +1310,13 @@ async function exportFixedExcel() {
     const hasToFix = importedData.some(r => r.status === "invalid" || r.status === "apierror");
     if (hasToFix) {
         await fixRows(importedData.filter(r => r.status === "invalid" || r.status === "apierror"));
+    }
+
+    // If there are review rows, warn user
+    const reviewCount = importedData.filter(r => r.status === "review").length;
+    if (reviewCount > 0) {
+        const proceed = confirm(`${reviewCount} ligne(s) n\u00e9cessitent encore une v\u00e9rification manuelle. Exporter quand m\u00eame ?`);
+        if (!proceed) return;
     }
 
     const data = [importHeaders, ...importedData.map(r => r.cells)];
