@@ -999,12 +999,18 @@ async function fixRows(rowsToFix) {
                 }
                 if (!best) best = results[0];
 
-                if (colMap.siren !== undefined) row.cells[colMap.siren] = best.siren;
-                if (colMap.nic !== undefined) row.cells[colMap.nic] = best.siret.slice(9);
-                if (colMap.siret !== undefined) row.cells[colMap.siret] = best.siret;
-                row.status = "fixed";
-                fixedCount++;
-                log(`${nom} -> ${best.siret} (${best.denomination}, ${best.cp} ${best.commune})`, "ok");
+                // Only apply if we have a minimum confidence (at least CP or ville matches)
+                if (bestScore >= 2) {
+                    if (colMap.siren !== undefined) row.cells[colMap.siren] = best.siren;
+                    if (colMap.nic !== undefined) row.cells[colMap.nic] = best.siret.slice(9);
+                    if (colMap.siret !== undefined) row.cells[colMap.siret] = best.siret;
+                    row.status = "fixed";
+                    fixedCount++;
+                    log(`${nom} -> ${best.siret} (${best.denomination}, ${best.cp} ${best.commune}) [score:${bestScore}]`, "ok");
+                } else {
+                    row.status = "notfound";
+                    log(`${nom} : r\u00e9sultats trouv\u00e9s mais aucun ne correspond (meilleur: ${best.denomination}, ${best.cp} ${best.commune}, score:${bestScore})`, "warn");
+                }
             }
         } catch (err) {
             if (err.message === "AUTH_ERROR") {
