@@ -635,7 +635,13 @@ async function searchByWildcard(word, apiKey) {
 
 function simplifyName(nom) {
     let s = nom.toUpperCase();
-    s = s.replace(/\b(RETR\.|RET\.|C\.E\.A\.|S\.A\.S\.|S\.A\.|S\.A\.R\.L\.|E\.U\.R\.L\.|SAS|SARL|SA)\b/g, "");
+    // Expand common abbreviations before stripping punctuation
+    s = s.replace(/\bRETR\.\b/g, "RETRAITE");
+    s = s.replace(/\bRET\.\b/g, "RETRAITE");
+    s = s.replace(/\bE\.?H\.?P\.?A\.?D\.?\b/g, "EHPAD");
+    s = s.replace(/\bEPHAD\b/g, "EHPAD"); // Fix common typo
+    // Remove legal forms
+    s = s.replace(/\b(C\.E\.A\.|S\.A\.S\.|S\.A\.|S\.A\.R\.L\.|E\.U\.R\.L\.|SAS|SARL|SA)\b/g, "");
     s = s.replace(/[.\-\/,;:'"()]/g, " ");
     s = s.replace(/\s+/g, " ").trim();
     return s;
@@ -657,6 +663,36 @@ function getSignificantWords(text) {
     // e.g. "PHARMACIE MICHAU" -> MICHAU, "MAIRIE DE MIREFLEURS" -> MIREFLEURS
     significant.reverse();
     return significant.length > 0 ? significant : words;
+}
+
+// Synonymes / aliases courants pour les noms d'établissements
+const NAME_ALIASES = [
+    { patterns: [/\bMAISON\s+DE\s+RETR(?:AITE)?\.?\b/i, /\bMDR\b/i], aliases: ["EHPAD", "MAISON DE RETRAITE"] },
+    { patterns: [/\bE\.?H\.?P\.?A\.?D\.?\b/i, /\bEPHAD\b/i], aliases: ["EHPAD", "MAISON DE RETRAITE"] },
+    { patterns: [/\bCH\b/, /\bC\.H\.\b/i], aliases: ["CENTRE HOSPITALIER"] },
+    { patterns: [/\bCHU\b/, /\bC\.H\.U\.\b/i], aliases: ["CENTRE HOSPITALIER UNIVERSITAIRE"] },
+    { patterns: [/\bCCAS\b/, /\bC\.C\.A\.S\.\b/i], aliases: ["CENTRE COMMUNAL ACTION SOCIALE"] },
+    { patterns: [/\bIME\b/, /\bI\.M\.E\.\b/i], aliases: ["INSTITUT MEDICO EDUCATIF"] },
+    { patterns: [/\bEHPAD\b/i], aliases: ["MAISON DE RETRAITE"] },
+];
+
+function getNameVariants(nom) {
+    const upper = nom.toUpperCase();
+    const variants = [];
+    for (const rule of NAME_ALIASES) {
+        for (const pattern of rule.patterns) {
+            if (pattern.test(upper)) {
+                for (const alias of rule.aliases) {
+                    const variant = upper.replace(pattern, alias).replace(/\s+/g, " ").trim();
+                    if (variant !== upper && !variants.includes(variant)) {
+                        variants.push(variant);
+                    }
+                }
+                break; // One rule matched, try its aliases, move on
+            }
+        }
+    }
+    return variants;
 }
 
 async function trySearch(fn) {
@@ -704,6 +740,21 @@ async function smartSearchByName(nom, apiKey) {
         results = await trySearch(() => searchByWildcard(sigWords[i], apiKey));
         if (results.length > 0) return results;
         await delay(400);
+    }
+
+    // Strategy 6: name aliases (MAISON DE RETR. -> EHPAD, MAISON DE RETRAITE, etc.)
+    const variants = getNameVariants(nom);
+    for (const variant of variants) {
+        results = await trySearch(() => searchByName(variant, apiKey));
+        if (results.length > 0) return results;
+        await delay(400);
+        // Also try with parentheses (words independently)
+        const vWords = variant.split(" ").filter(w => w.length >= 2);
+        if (vWords.length > 1) {
+            results = await trySearch(() => searchByWords(vWords, apiKey));
+            if (results.length > 0) return results;
+            await delay(400);
+        }
     }
 
     return [];
