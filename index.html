@@ -488,6 +488,11 @@
                 <tbody id="modalBody"></tbody>
             </table>
         </div>
+        <div style="display:flex;gap:0.5rem;align-items:center;margin-bottom:1rem;flex-wrap:wrap;">
+            <label style="font-size:0.82rem;font-weight:500;color:#555;">Autre orthographe :</label>
+            <input type="text" id="modalRetryName" placeholder="Ex: PHARMACIE MICHAUX" style="flex:1;min-width:200px;padding:0.5rem 0.7rem;border:1.5px solid #ddd;border-radius:8px;font-size:0.85rem;">
+            <button class="btn btn-warning" id="modalRetryBtn" onclick="retryWithNewName()">Relancer la recherche</button>
+        </div>
         <div class="modal-actions">
             <button class="btn btn-primary" id="modalConfirmBtn" disabled onclick="confirmModalSelection()">Appliquer</button>
             <button class="btn" style="background:#eee;color:#333;" onclick="skipModalSelection()">Passer</button>
@@ -1245,12 +1250,92 @@ function showSelectionModal(row) {
         tbody.appendChild(tr);
     }
 
+    document.getElementById("modalRetryName").value = nom;
     document.getElementById("modalConfirmBtn").disabled = true;
     document.getElementById("modalOverlay").classList.add("active");
 
     // Count remaining reviews
     const remaining = importedData.filter(r => r.status === "review").length;
     document.getElementById("modalSkipAllBtn").textContent = `Tout passer (${remaining})`;
+}
+
+async function retryWithNewName() {
+    if (!currentModalRow) return;
+    const newName = document.getElementById("modalRetryName").value.trim().toUpperCase();
+    if (!newName) return;
+
+    const apiKey = document.getElementById("apiKey").value.trim();
+    if (!apiKey) { alert("Cl\u00e9 API manquante."); return; }
+
+    const btn = document.getElementById("modalRetryBtn");
+    btn.disabled = true;
+    btn.textContent = "Recherche...";
+
+    try {
+        const results = await smartSearchByName(newName, apiKey);
+        if (results.length === 0) {
+            alert(`Aucun r\u00e9sultat pour "${newName}".`);
+            btn.disabled = false;
+            btn.textContent = "Relancer la recherche";
+            return;
+        }
+
+        // Re-score with file's CP/ville/adresse
+        const cpRaw = colMap.cp !== undefined ? currentModalRow.cells[colMap.cp].trim() : "";
+        const cp = cpRaw && /^\d+$/.test(cpRaw) ? cpRaw.padStart(5, "0") : cpRaw;
+        const ville = colMap.ville !== undefined ? currentModalRow.cells[colMap.ville].trim().toUpperCase() : "";
+        const adresse = colMap.adresse !== undefined ? currentModalRow.cells[colMap.adresse].trim().toUpperCase() : "";
+
+        currentModalRow.candidates = results.map(r => {
+            let sc = 0;
+            const rCp = (r.cp || "").padStart(5, "0");
+            if (cp && rCp === cp) sc += 3;
+            if (ville && r.commune) {
+                const rv = r.commune.toUpperCase();
+                if (rv.includes(ville) || ville.includes(rv)) sc += 2;
+            }
+            if (adresse && r.adresse) {
+                const ra = r.adresse.toUpperCase();
+                const aw = adresse.split(/[\s,]+/).filter(w => w.length >= 3);
+                sc += aw.filter(w => ra.includes(w)).length;
+            }
+            if (r.siege) sc += 0.5;
+            return { ...r, score: sc };
+        }).sort((a, b) => b.score - a.score).slice(0, 20);
+
+        log(`Nouvelle recherche "${newName}" : ${results.length} r\u00e9sultat(s)`, "ok");
+
+        // Re-render modal table with new candidates
+        const tbody = document.getElementById("modalBody");
+        tbody.innerHTML = "";
+        selectedCandidate = null;
+        document.getElementById("modalConfirmBtn").disabled = true;
+
+        for (const c of currentModalRow.candidates) {
+            const tr = document.createElement("tr");
+            tr.innerHTML = `
+                <td>${c.siren}</td>
+                <td>${c.siret}</td>
+                <td>${c.denomination}</td>
+                <td>${c.adresse}</td>
+                <td>${c.cp}</td>
+                <td>${c.commune}</td>
+                <td>${c.score}</td>
+            `;
+            tr.addEventListener("click", () => {
+                tbody.querySelectorAll("tr").forEach(r => r.classList.remove("selected"));
+                tr.classList.add("selected");
+                selectedCandidate = c;
+                document.getElementById("modalConfirmBtn").disabled = false;
+            });
+            tbody.appendChild(tr);
+        }
+    } catch (err) {
+        alert(`Erreur : ${err.message}`);
+    } finally {
+        btn.disabled = false;
+        btn.textContent = "Relancer la recherche";
+    }
 }
 
 function confirmModalSelection() {
