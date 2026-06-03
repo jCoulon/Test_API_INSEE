@@ -1012,8 +1012,14 @@ async function retryErrors() {
 
 // ========== EXPORT FIXED EXCEL ==========
 
-function exportFixedExcel() {
+async function exportFixedExcel() {
     if (importedData.length === 0) return;
+
+    // Run correction if not already done
+    const hasToFix = importedData.some(r => r.status === "invalid" || r.status === "apierror");
+    if (hasToFix) {
+        await fixRows(importedData.filter(r => r.status === "invalid" || r.status === "apierror"));
+    }
 
     const data = [importHeaders, ...importedData.map(r => r.cells)];
     const ws = XLSX.utils.aoa_to_sheet(data);
