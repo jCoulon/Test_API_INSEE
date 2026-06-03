@@ -413,6 +413,72 @@ async function searchByName(nom, apiKey) {
         .map(parseEtablissement);
 }
 
+function simplifyName(nom) {
+    // Remove abbreviation dots, common abbreviations, punctuation
+    let s = nom.toUpperCase();
+    s = s.replace(/\b(RETR\.|RET\.|C\.E\.A\.|S\.A\.S\.|S\.A\.|S\.A\.R\.L\.|E\.U\.R\.L\.|SAS|SARL|SA)\b/g, "");
+    s = s.replace(/[.\-\/,;:'"()]/g, " ");
+    s = s.replace(/\s+/g, " ").trim();
+    return s;
+}
+
+async function searchByNameRaw(query, apiKey) {
+    const url = `${API_BASE}/siret?q=denominationUniteLegale:${encodeURIComponent(query)}&nombre=20`;
+    const resp = await fetch(url, {
+        headers: { "X-INSEE-Api-Key-Integration": apiKey, "Accept": "application/json" }
+    });
+    if (resp.status === 401) throw new Error("Cl\u00e9 API invalide ou expir\u00e9e (401).");
+    if (resp.status === 404) return [];
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    return (data.etablissements || [])
+        .filter(etab => {
+            const periodes = etab.periodesEtablissement || [];
+            return periodes.length > 0 && periodes[0].etatAdministratifEtablissement === "A";
+        })
+        .map(parseEtablissement);
+}
+
+async function smartSearchByName(nom, apiKey) {
+    // Strategy 1: exact quoted match
+    let results = await searchByName(nom, apiKey);
+    if (results.length > 0) return results;
+    await delay(400);
+
+    // Strategy 2: simplified name (remove abbreviations/punctuation), quoted
+    const simplified = simplifyName(nom);
+    if (simplified !== nom.toUpperCase()) {
+        results = await searchByName(simplified, apiKey);
+        if (results.length > 0) return results;
+        await delay(400);
+    }
+
+    // Strategy 3: unquoted search (partial match, each word matched independently)
+    results = await searchByNameRaw(simplified, apiKey);
+    if (results.length > 0) return results;
+    await delay(400);
+
+    // Strategy 4: keep only significant words (3+ chars), search unquoted
+    const words = simplified.split(" ").filter(w => w.length >= 3);
+    if (words.length > 1) {
+        // Try with the most significant words (skip generic ones)
+        const generic = new Set(["LES", "DES", "DU", "DE", "LA", "LE", "ET", "EN", "AU", "AUX", "PAR", "SUR", "POUR"]);
+        const significant = words.filter(w => !generic.has(w));
+        if (significant.length > 0 && significant.join(" ") !== simplified) {
+            results = await searchByNameRaw(significant.join(" "), apiKey);
+            if (results.length > 0) return results;
+            await delay(400);
+        }
+        // Try just the first significant word
+        if (significant.length > 1) {
+            results = await searchByNameRaw(significant[0], apiKey);
+            if (results.length > 0) return results;
+        }
+    }
+
+    return [];
+}
+
 async function searchBySiret(siret, apiKey) {
     const url = `${API_BASE}/siret/${siret}`;
     const resp = await fetch(url, {
@@ -693,7 +759,7 @@ async function fixInvalidSirens() {
         const ville = colMap.ville !== undefined ? row.cells[colMap.ville] : "";
 
         try {
-            const results = await searchByName(nom, apiKey);
+            const results = await smartSearchByName(nom, apiKey);
 
             if (results.length === 0) {
                 row.status = "notfound";
