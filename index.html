@@ -529,9 +529,20 @@ async function searchByName(nom, apiKey) {
     return filterActiveEtablissements(result.data);
 }
 
-async function searchByNameRaw(query, apiKey) {
+async function searchByWord(word, apiKey) {
+    // Single unquoted word search — valid Lucene syntax
     const u = new URL(`${API_BASE}/siret`);
-    u.searchParams.set("q", `denominationUniteLegale:${query}`);
+    u.searchParams.set("q", `denominationUniteLegale:${word}`);
+    u.searchParams.set("nombre", "20");
+    const result = await fetchWithRetry(u.toString(), apiKey);
+    if (result.status === 404 || !result.data) return [];
+    return filterActiveEtablissements(result.data);
+}
+
+async function searchByWildcard(word, apiKey) {
+    // Wildcard search for partial names (e.g. MICHAU -> MICHAUD)
+    const u = new URL(`${API_BASE}/siret`);
+    u.searchParams.set("q", `denominationUniteLegale:${word}*`);
     u.searchParams.set("nombre", "20");
     const result = await fetchWithRetry(u.toString(), apiKey);
     if (result.status === 404 || !result.data) return [];
@@ -546,13 +557,23 @@ function simplifyName(nom) {
     return s;
 }
 
+function getSignificantWords(text) {
+    const generic = new Set(["LES","DES","DU","DE","LA","LE","ET","EN","AU","AUX","PAR","SUR","POUR",
+        "MAISON","SOCIETE","GROUPE","ETABLISSEMENT","CENTRE","SERVICE"]);
+    const words = text.split(" ").filter(w => w.length >= 3);
+    const significant = words.filter(w => !generic.has(w));
+    // Sort by length descending — longer words are more specific
+    significant.sort((a, b) => b.length - a.length);
+    return significant.length > 0 ? significant : words;
+}
+
 async function smartSearchByName(nom, apiKey) {
     // Strategy 1: exact quoted match
     let results = await searchByName(nom, apiKey);
     if (results.length > 0) return results;
     await delay(400);
 
-    // Strategy 2: simplified name (remove abbreviations/punctuation), quoted
+    // Strategy 2: simplified name, exact quoted
     const simplified = simplifyName(nom);
     if (simplified !== nom.toUpperCase()) {
         results = await searchByName(simplified, apiKey);
@@ -560,25 +581,19 @@ async function smartSearchByName(nom, apiKey) {
         await delay(400);
     }
 
-    // Strategy 3: unquoted search (partial match)
-    results = await searchByNameRaw(simplified, apiKey);
-    if (results.length > 0) return results;
-    await delay(400);
+    // Strategy 3: search the most specific single word (unquoted)
+    const words = getSignificantWords(simplified);
+    for (let i = 0; i < Math.min(words.length, 3); i++) {
+        results = await searchByWord(words[i], apiKey);
+        if (results.length > 0) return results;
+        await delay(400);
+    }
 
-    // Strategy 4: significant words only
-    const words = simplified.split(" ").filter(w => w.length >= 3);
-    if (words.length > 1) {
-        const generic = new Set(["LES", "DES", "DU", "DE", "LA", "LE", "ET", "EN", "AU", "AUX", "PAR", "SUR", "POUR"]);
-        const significant = words.filter(w => !generic.has(w));
-        if (significant.length > 0 && significant.join(" ") !== simplified) {
-            results = await searchByNameRaw(significant.join(" "), apiKey);
-            if (results.length > 0) return results;
-            await delay(400);
-        }
-        if (significant.length > 1) {
-            results = await searchByNameRaw(significant[0], apiKey);
-            if (results.length > 0) return results;
-        }
+    // Strategy 4: wildcard on the most specific word (catches MICHAU -> MICHAUD)
+    for (let i = 0; i < Math.min(words.length, 2); i++) {
+        results = await searchByWildcard(words[i], apiKey);
+        if (results.length > 0) return results;
+        await delay(400);
     }
 
     return [];
