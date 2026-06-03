@@ -833,8 +833,14 @@ async function fixInvalidSirens() {
 
 // ========== EXPORT FIXED EXCEL ==========
 
-function exportFixedExcel() {
+async function exportFixedExcel() {
     if (importedData.length === 0) return;
+
+    // If there are still invalid rows, run correction first
+    const hasInvalid = importedData.some(r => r.status === "invalid");
+    if (hasInvalid) {
+        await fixInvalidSirens();
+    }
 
     const data = [importHeaders, ...importedData.map(r => r.cells)];
     const ws = XLSX.utils.aoa_to_sheet(data);
