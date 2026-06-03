@@ -320,6 +320,10 @@
                 <label for="siretInput">ou SIRET(s) (s&eacute;par&eacute;s par des virgules)</label>
                 <input type="text" id="siretInput" placeholder="Ex: 43024385700116, 30669069400139">
             </div>
+            <div class="form-group search">
+                <label for="adresseInput">Adresse / CP / Ville (optionnel, pour affiner)</label>
+                <input type="text" id="adresseInput" placeholder="Ex: 63000, CLERMONT-FERRAND, 12 RUE...">
+            </div>
             <button type="submit" class="btn btn-primary" id="searchBtn">
                 <span id="searchText">Rechercher</span>
                 <div class="spinner" id="spinner"></div>
@@ -644,6 +648,7 @@ document.getElementById("searchForm").addEventListener("submit", async (e) => {
     if (!apiKey || (!nomInput && !siretInputVal)) return;
     localStorage.setItem("insee_api_key", apiKey);
 
+    const adresseFilter = document.getElementById("adresseInput").value.trim().toUpperCase();
     const btn = document.getElementById("searchBtn");
     const spinner = document.getElementById("spinner");
     const searchText = document.getElementById("searchText");
@@ -675,6 +680,15 @@ document.getElementById("searchForm").addEventListener("submit", async (e) => {
                 currentResults.push(...res);
                 if (i < noms.length - 1) await delay(300);
             }
+        }
+        // Filter by address/CP/ville if provided
+        if (adresseFilter && currentResults.length > 0) {
+            const filterWords = adresseFilter.split(/[\s,]+/).filter(w => w.length >= 2);
+            const filtered = currentResults.filter(r => {
+                const full = `${r.adresse} ${r.cp} ${r.commune}`.toUpperCase();
+                return filterWords.some(w => full.includes(w));
+            });
+            if (filtered.length > 0) currentResults = filtered;
         }
         renderResults(searchLabel);
     } catch (err) {
