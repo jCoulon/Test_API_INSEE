@@ -979,24 +979,36 @@ async function fixRows(rowsToFix) {
         const nom = row.cells[colMap.nom];
         progressText.textContent = `Traitement ${processed}/${rowsToFix.length} : ${nom}...`;
 
-        const cp = colMap.cp !== undefined ? row.cells[colMap.cp] : "";
-        const ville = colMap.ville !== undefined ? row.cells[colMap.ville] : "";
-        const adresse = colMap.adresse !== undefined ? row.cells[colMap.adresse].toUpperCase() : "";
+        // Normalize CP: pad to 5 digits (Excel may strip leading zeros)
+        const cpRaw = colMap.cp !== undefined ? row.cells[colMap.cp].trim() : "";
+        const cp = cpRaw && /^\d+$/.test(cpRaw) ? cpRaw.padStart(5, "0") : cpRaw;
+        const ville = colMap.ville !== undefined ? row.cells[colMap.ville].trim().toUpperCase() : "";
+        const adresse = colMap.adresse !== undefined ? row.cells[colMap.adresse].trim().toUpperCase() : "";
+
+        log(`  Recherche: ${nom} | CP: ${cp} | Ville: ${ville} | Adresse: ${adresse}`, "");
 
         try {
             const results = await smartSearchByName(nom, apiKey);
 
             if (results.length === 0) {
                 row.status = "notfound";
-                log(`${nom} : non trouv\u00e9`, "warn");
+                log(`${nom} : aucun r\u00e9sultat API`, "warn");
             } else {
+                log(`  ${results.length} r\u00e9sultat(s) trouv\u00e9(s), scoring...`, "");
                 // Score each result
                 let best = null;
                 let bestScore = -1;
                 for (const r of results) {
                     let score = 0;
-                    if (cp && r.cp === cp) score += 3;
-                    if (ville && r.commune && r.commune.toUpperCase().includes(ville.toUpperCase())) score += 2;
+                    // CP: normalize API CP too
+                    const rCp = (r.cp || "").padStart(5, "0");
+                    if (cp && rCp === cp) score += 3;
+                    // Ville: match in both directions
+                    if (ville && r.commune) {
+                        const rVille = r.commune.toUpperCase();
+                        if (rVille.includes(ville) || ville.includes(rVille)) score += 2;
+                    }
+                    // Adresse: match significant words
                     if (adresse && r.adresse) {
                         const rAddr = r.adresse.toUpperCase();
                         const addrWords = adresse.split(/[\s,]+/).filter(w => w.length >= 3);
@@ -1018,7 +1030,7 @@ async function fixRows(rowsToFix) {
                     log(`${nom} -> ${best.siret} (${best.denomination}, ${best.cp} ${best.commune}) [score:${bestScore}]`, "ok");
                 } else {
                     row.status = "notfound";
-                    log(`${nom} : r\u00e9sultats trouv\u00e9s mais aucun ne correspond (meilleur: ${best.denomination}, ${best.cp} ${best.commune}, score:${bestScore})`, "warn");
+                    log(`${nom} : meilleur candidat: ${best.denomination}, ${best.cp} ${best.commune} [score:${bestScore}] - pas assez fiable`, "warn");
                 }
             }
         } catch (err) {
