@@ -558,12 +558,20 @@ function simplifyName(nom) {
 }
 
 function getSignificantWords(text) {
-    const generic = new Set(["LES","DES","DU","DE","LA","LE","ET","EN","AU","AUX","PAR","SUR","POUR",
-        "MAISON","SOCIETE","GROUPE","ETABLISSEMENT","CENTRE","SERVICE"]);
+    const generic = new Set([
+        // Articles, prepositions
+        "LES","DES","DU","DE","LA","LE","ET","EN","AU","AUX","PAR","SUR","POUR","UNE","UN",
+        // Common business types — too generic to search alone
+        "MAISON","SOCIETE","GROUPE","ETABLISSEMENT","CENTRE","SERVICE","PHARMACIE","MAIRIE",
+        "COMMUNE","UNION","ASSOCIATION","CABINET","AGENCE","BUREAU","OFFICE","INSTITUT",
+        "CLINIQUE","HOPITAL","ECOLE","LYCEE","COLLEGE","GARAGE","HOTEL","RESTAURANT",
+        "BOULANGERIE","INDUSTRIE","INDUSTRIES","SCI","SARL","SAS","EURL"
+    ]);
     const words = text.split(" ").filter(w => w.length >= 3);
     const significant = words.filter(w => !generic.has(w));
-    // Sort by length descending — longer words are more specific
-    significant.sort((a, b) => b.length - a.length);
+    // Reverse: last word in a name is typically the most distinctive
+    // e.g. "PHARMACIE MICHAU" -> MICHAU, "MAIRIE DE MIREFLEURS" -> MIREFLEURS
+    significant.reverse();
     return significant.length > 0 ? significant : words;
 }
 
