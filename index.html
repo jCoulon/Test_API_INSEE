@@ -1150,15 +1150,21 @@ async function fixRows(rowsToFix) {
                 // Score each result
                 let best = null;
                 let bestScore = -1;
+                let bestVilleMatch = false;
                 for (const r of results) {
                     let score = 0;
+                    let villeMatch = false;
                     // CP: normalize API CP too
                     const rCp = (r.cp || "").padStart(5, "0");
                     if (cp && rCp === cp) score += 3;
                     // Ville: match in both directions
                     if (ville && r.commune) {
                         const rVille = r.commune.toUpperCase();
-                        if (rVille.includes(ville) || ville.includes(rVille)) score += 2;
+                        // Check if at least part of the ville matches
+                        const villeWords = ville.split(/[\s\-]+/).filter(w => w.length >= 3);
+                        const rVilleWords = rVille.split(/[\s\-]+/).filter(w => w.length >= 3);
+                        const partialMatch = villeWords.some(w => rVille.includes(w)) || rVilleWords.some(w => ville.includes(w));
+                        if (partialMatch) { score += 2; villeMatch = true; }
                     }
                     // Adresse: match significant words
                     if (adresse && r.adresse) {
@@ -1168,12 +1174,12 @@ async function fixRows(rowsToFix) {
                         if (matched > 0) score += matched;
                     }
                     if (r.siege) score += 0.5;
-                    if (score > bestScore) { bestScore = score; best = r; }
+                    if (score > bestScore) { bestScore = score; best = r; bestVilleMatch = villeMatch; }
                 }
                 if (!best) best = results[0];
 
-                // Only apply if we have a minimum confidence (at least CP or ville matches)
-                if (bestScore >= 2) {
+                // Only apply if we have a minimum confidence AND ville matches (when ville is available)
+                if (bestScore >= 2 && (!ville || bestVilleMatch)) {
                     if (colMap.siren !== undefined) row.cells[colMap.siren] = best.siren;
                     if (colMap.nic !== undefined) row.cells[colMap.nic] = best.siret.slice(9);
                     if (colMap.siret !== undefined) row.cells[colMap.siret] = best.siret;
@@ -1181,6 +1187,7 @@ async function fixRows(rowsToFix) {
                     fixedCount++;
                     log(`${nom} -> ${best.siret} (${best.denomination}, ${best.cp} ${best.commune}) [score:${bestScore}]`, "ok");
                 } else {
+                    const reason = (ville && !bestVilleMatch) ? "ville ne correspond pas" : "score trop faible";
                     // Store candidates with scores for manual review
                     row.candidates = results.map(r => {
                         let sc = 0;
@@ -1188,7 +1195,9 @@ async function fixRows(rowsToFix) {
                         if (cp && rCp2 === cp) sc += 3;
                         if (ville && r.commune) {
                             const rv = r.commune.toUpperCase();
-                            if (rv.includes(ville) || ville.includes(rv)) sc += 2;
+                            const vw = ville.split(/[\s\-]+/).filter(w => w.length >= 3);
+                            const rw = rv.split(/[\s\-]+/).filter(w => w.length >= 3);
+                            if (vw.some(w => rv.includes(w)) || rw.some(w => ville.includes(w))) sc += 2;
                         }
                         if (adresse && r.adresse) {
                             const ra = r.adresse.toUpperCase();
@@ -1199,7 +1208,7 @@ async function fixRows(rowsToFix) {
                         return { ...r, score: sc };
                     }).sort((a, b) => b.score - a.score).slice(0, 20);
                     row.status = "review";
-                    log(`${nom} : ${results.length} candidat(s) - s\u00e9lection manuelle requise [meilleur score:${bestScore}]`, "warn");
+                    log(`${nom} : ${reason} - meilleur: ${best.denomination}, ${best.cp} ${best.commune} [score:${bestScore}]`, "warn");
                 }
             }
         } catch (err) {
@@ -1343,7 +1352,9 @@ async function retryWithNewName() {
             if (cp && rCp === cp) sc += 3;
             if (ville && r.commune) {
                 const rv = r.commune.toUpperCase();
-                if (rv.includes(ville) || ville.includes(rv)) sc += 2;
+                const vw = ville.split(/[\s\-]+/).filter(w => w.length >= 3);
+                const rw = rv.split(/[\s\-]+/).filter(w => w.length >= 3);
+                if (vw.some(w => rv.includes(w)) || rw.some(w => ville.includes(w))) sc += 2;
             }
             if (adresse && r.adresse) {
                 const ra = r.adresse.toUpperCase();
