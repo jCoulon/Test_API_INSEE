@@ -1211,9 +1211,13 @@ function showSelectionModal(row) {
     const nom = colMap.nom !== undefined ? row.cells[colMap.nom] : "?";
     const cp = colMap.cp !== undefined ? row.cells[colMap.cp] : "";
     const ville = colMap.ville !== undefined ? row.cells[colMap.ville] : "";
+    const adresse = colMap.adresse !== undefined ? row.cells[colMap.adresse] : "";
 
     document.getElementById("modalTitle").textContent = `S\u00e9lection pour : ${nom}`;
-    document.getElementById("modalInfo").textContent = `Fichier : CP ${cp}, Ville ${ville}. Choisissez le bon \u00e9tablissement ou passez.`;
+    const infoParts = [`Nom dans le fichier : "${nom}" (le nom peut \u00eatre inexact ou abr\u00e9g\u00e9)`];
+    if (cp || ville) infoParts.push(`Adresse fichier : ${adresse ? adresse + ", " : ""}${cp} ${ville}`.trim());
+    infoParts.push("Choisissez le bon \u00e9tablissement ou passez.");
+    document.getElementById("modalInfo").innerHTML = infoParts.join("<br>");
 
     const tbody = document.getElementById("modalBody");
     tbody.innerHTML = "";
