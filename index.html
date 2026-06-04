@@ -281,6 +281,8 @@
         .import-log .log-ok { color: #27ae60; }
         .import-log .log-warn { color: #e67e22; }
 
+        .badge-mismatch { background: #fce4ec; color: #b71c1c; }
+        .row-mismatch { background: #fff0f3 !important; }
         .badge-review { background: #e8daef; color: #6c3483; }
         .row-review { background: #faf5ff !important; }
 
@@ -435,6 +437,9 @@
                 <button class="btn btn-warning" id="fixBtn" onclick="fixInvalidSirens()">
                     Corriger automatiquement
                 </button>
+                <button class="btn btn-primary" id="verifyBtn" onclick="verifySirets()">
+                    V&eacute;rifier les SIRET existants
+                </button>
                 <button class="btn btn-info" id="retryBtn" onclick="retryErrors()" style="display:none;">
                     Relancer les erreurs
                 </button>
@@ -459,6 +464,7 @@
             <button onclick="setFilter('apierror')">Erreurs API</button>
             <button onclick="setFilter('ok')">OK</button>
             <button onclick="setFilter('review')">A v&eacute;rifier</button>
+            <button onclick="setFilter('mismatch')">Incoh&eacute;rents</button>
         </div>
         <div class="table-container" id="importTableContainer">
             <table>
@@ -1022,7 +1028,8 @@ function getStats() {
     const notfound = importedData.filter(r => r.status === "notfound").length;
     const apierror = importedData.filter(r => r.status === "apierror").length;
     const review = importedData.filter(r => r.status === "review").length;
-    return { total, ok, invalid, fixed, notfound, apierror, review };
+    const mismatch = importedData.filter(r => r.status === "mismatch").length;
+    return { total, ok, invalid, fixed, notfound, apierror, review, mismatch };
 }
 
 function updateStats() {
@@ -1034,6 +1041,7 @@ function updateStats() {
     if (s.notfound > 0) parts.push(`<span style="color:#888"><strong>${s.notfound}</strong> non trouv\u00e9(s)</span>`);
     if (s.apierror > 0) parts.push(`<span style="color:#c0392b"><strong>${s.apierror}</strong> erreur(s) API</span>`);
     if (s.review > 0) parts.push(`<span style="color:#6c3483"><strong>${s.review}</strong> &agrave; v&eacute;rifier</span>`);
+    if (s.mismatch > 0) parts.push(`<span style="color:#b71c1c"><strong>${s.mismatch}</strong> incoh&eacute;rent(s)</span>`);
     document.getElementById("importStats").innerHTML = parts.join(" &mdash; ");
 
     // Show/hide retry button
@@ -1078,6 +1086,7 @@ function renderImportTableBody() {
         if (row.status === "invalid" || row.status === "apierror") tr.className = "row-invalid";
         else if (row.status === "fixed") tr.className = "row-fixed";
         else if (row.status === "review") tr.className = "row-review";
+        else if (row.status === "mismatch") tr.className = "row-mismatch";
 
         let statusBadge = "";
         switch (row.status) {
@@ -1087,11 +1096,12 @@ function renderImportTableBody() {
             case "notfound": statusBadge = `<span class="badge badge-notfound">Non trouv\u00e9</span>`; break;
             case "apierror": statusBadge = `<span class="badge badge-apierror">Erreur API</span>`; break;
             case "review": statusBadge = `<span class="badge badge-review">A v&eacute;rifier</span>`; break;
+            case "mismatch": statusBadge = `<span class="badge badge-mismatch">Incoh&eacute;rent</span>`; break;
             default: statusBadge = "";
         }
 
         tr.innerHTML = row.cells.map(c => `<td>${c}</td>`).join("") + `<td>${statusBadge}</td>`;
-        if (row.status === "review" && row.candidates) {
+        if ((row.status === "review" || row.status === "mismatch") && row.candidates) {
             tr.style.cursor = "pointer";
             tr.title = "Cliquer pour choisir parmi les candidats";
             tr.addEventListener("click", () => showSelectionModal(row));
@@ -1282,6 +1292,125 @@ async function retryErrors() {
     await fixRows(rows);
 }
 
+// ========== VERIFY EXISTING SIRETS ==========
+
+async function verifySirets() {
+    const apiKey = document.getElementById("apiKey").value.trim();
+    if (!apiKey) { alert("Veuillez saisir votre cl\u00e9 API INSEE."); return; }
+    localStorage.setItem("insee_api_key", apiKey);
+
+    // Get rows with valid SIREN/SIRET to verify
+    const rowsToVerify = importedData.filter(r => r.status === "ok" || r.status === "fixed");
+    if (rowsToVerify.length === 0) { alert("Aucune ligne OK \u00e0 v\u00e9rifier."); return; }
+
+    correctionStopped = false;
+    const fixBtn = document.getElementById("fixBtn");
+    const verifyBtn = document.getElementById("verifyBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const progressBar = document.getElementById("progressBar");
+    const progressFill = document.getElementById("progressFill");
+    const progressText = document.getElementById("progressText");
+
+    fixBtn.disabled = true;
+    verifyBtn.disabled = true;
+    verifyBtn.textContent = "V\u00e9rification en cours...";
+    stopBtn.style.display = "inline-flex";
+    progressBar.style.display = "block";
+    progressText.style.display = "block";
+    progressFill.style.width = "0%";
+
+    let processed = 0;
+    let mismatchCount = 0;
+    let errorCount = 0;
+
+    for (const row of rowsToVerify) {
+        if (correctionStopped) {
+            log(`V\u00e9rification arr\u00eat\u00e9e apr\u00e8s ${processed} lignes.`, "warn");
+            break;
+        }
+
+        processed++;
+        const pct = Math.round((processed / rowsToVerify.length) * 100);
+        progressFill.style.width = pct + "%";
+
+        // Get the SIRET to verify
+        let siret = "";
+        if (colMap.siret !== undefined) siret = row.cells[colMap.siret].trim();
+        if (!siret && colMap.siren !== undefined && colMap.nic !== undefined) {
+            siret = row.cells[colMap.siren].trim() + row.cells[colMap.nic].trim().padStart(5, "0");
+        }
+        if (!siret || siret.length < 14) {
+            // Can't verify without SIRET, skip
+            processed++;
+            continue;
+        }
+
+        const nom = colMap.nom !== undefined ? row.cells[colMap.nom].trim().toUpperCase() : "";
+        const ville = colMap.ville !== undefined ? row.cells[colMap.ville].trim().toUpperCase() : "";
+        progressText.textContent = `V\u00e9rification ${processed}/${rowsToVerify.length} : ${siret}...`;
+
+        try {
+            const results = await searchBySiret(siret, apiKey);
+
+            if (results.length === 0) {
+                // SIRET not found in API — could be closed or wrong
+                row.status = "mismatch";
+                row.mismatchReason = "SIRET introuvable dans l'API";
+                mismatchCount++;
+                log(`${siret} (${nom}) : SIRET introuvable dans l'API`, "error");
+            } else {
+                const etab = results[0];
+                // Check name match
+                const apiNom = (etab.denomination || "").toUpperCase();
+                const nomWords = nom.split(/[\s\-]+/).filter(w => w.length >= 3);
+                const nameMatch = nomWords.length === 0 || nomWords.some(w => apiNom.includes(w)) || apiNom.split(/[\s\-]+/).some(w => w.length >= 3 && nom.includes(w));
+
+                // Check ville match
+                const apiVille = (etab.commune || "").toUpperCase();
+                const villeWords = ville.split(/[\s\-]+/).filter(w => w.length >= 3);
+                const apiVilleWords = apiVille.split(/[\s\-]+/).filter(w => w.length >= 3);
+                const villeMatch = !ville || villeWords.some(w => apiVille.includes(w)) || apiVilleWords.some(w => ville.includes(w));
+
+                if (!nameMatch || !villeMatch) {
+                    const reasons = [];
+                    if (!nameMatch) reasons.push(`nom: fichier="${nom}" / API="${apiNom}"`);
+                    if (!villeMatch) reasons.push(`ville: fichier="${ville}" / API="${apiVille}"`);
+                    row.status = "mismatch";
+                    row.mismatchReason = reasons.join(", ");
+                    // Store API result as candidate for user to see
+                    row.candidates = [{ ...etab, score: 0 }];
+                    mismatchCount++;
+                    log(`${siret} : INCOH\u00c9RENT - ${reasons.join(", ")}`, "error");
+                } else {
+                    // All good, keep as is
+                    if (processed % 50 === 0) log(`${processed}/${rowsToVerify.length} v\u00e9rifi\u00e9(s)...`, "");
+                }
+            }
+        } catch (err) {
+            if (err.message === "AUTH_ERROR") {
+                log("Cl\u00e9 API invalide ! V\u00e9rification arr\u00eat\u00e9e.", "error");
+                break;
+            }
+            errorCount++;
+            log(`${siret} : erreur API (${err.message})`, "error");
+        }
+
+        updateStats();
+        if (processed % 20 === 0 || processed === rowsToVerify.length) {
+            renderImportTableBody();
+        }
+        await delay(150);
+    }
+
+    progressText.textContent = `V\u00e9rification termin\u00e9e ! ${processed} v\u00e9rifi\u00e9(s), ${mismatchCount} incoh\u00e9rent(s), ${errorCount} erreur(s).`;
+    fixBtn.disabled = false;
+    verifyBtn.disabled = false;
+    verifyBtn.textContent = "V\u00e9rifier les SIRET existants";
+    stopBtn.style.display = "none";
+    updateStats();
+    renderImportTableBody();
+}
+
 // ========== MANUAL SELECTION MODAL ==========
 
 let currentModalRow = null;
@@ -1301,6 +1430,7 @@ function showSelectionModal(row) {
     document.getElementById("modalTitle").textContent = `S\u00e9lection pour : ${nom}`;
     const infoParts = [`Nom dans le fichier : "${nom}" (le nom peut \u00eatre inexact ou abr\u00e9g\u00e9)`];
     if (cp || ville) infoParts.push(`Adresse fichier : ${adresse ? adresse + ", " : ""}${cp} ${ville}`.trim());
+    if (row.mismatchReason) infoParts.push(`<strong style="color:#b71c1c">Incoh\u00e9rence : ${row.mismatchReason}</strong>`);
     infoParts.push("Choisissez le bon \u00e9tablissement ou passez.");
     document.getElementById("modalInfo").innerHTML = infoParts.join("<br>");
 
