@@ -362,8 +362,8 @@
                 <input type="text" id="companyName" placeholder="Ex: ORONA, ENGIE, AIR FRANCE">
             </div>
             <div class="form-group search">
-                <label for="siretInput">ou SIRET(s) (s&eacute;par&eacute;s par des virgules)</label>
-                <input type="text" id="siretInput" placeholder="Ex: 43024385700116, 30669069400139">
+                <label for="siretInput">ou SIRET(s) — virgules, espaces ou retours &agrave; la ligne (jusqu'&agrave; 1000+)</label>
+                <textarea id="siretInput" rows="3" placeholder="Ex: 43024385700116, 30669069400139&#10;Ou collez une liste (1 par ligne)" style="padding:0.6rem 0.8rem;border:1.5px solid #ddd;border-radius:8px;font-size:0.9rem;resize:vertical;font-family:inherit;"></textarea>
             </div>
             <div class="form-group search">
                 <label for="adresseInput">Adresse / CP / Ville (optionnel, pour affiner)</label>
@@ -373,6 +373,7 @@
                 <span id="searchText">Rechercher</span>
                 <div class="spinner" id="spinner"></div>
             </button>
+            <button type="button" class="btn btn-danger" id="searchStopBtn" style="display:none;" onclick="searchStopped=true;this.style.display='none';">Stop</button>
         </form>
     </div>
 
@@ -512,6 +513,7 @@ let importHeaders = [];
 let colMap = {};
 let currentFilter = "all";
 let correctionStopped = false;
+let searchStopped = false;
 
 // Restore API key
 const savedKey = localStorage.getItem("insee_api_key");
@@ -787,23 +789,40 @@ document.getElementById("searchForm").addEventListener("submit", async (e) => {
     spinner.style.display = "inline-block";
     searchText.textContent = "Recherche...";
     errorMsg.style.display = "none";
+    searchStopped = false;
+    document.getElementById("searchStopBtn").style.display = "inline-flex";
 
     try {
         currentResults = [];
         let searchLabel = "";
+        let errorsList = [];
         if (siretInputVal.length > 0) {
-            const sirets = siretInputVal.split(",").map(s => s.trim()).filter(s => s.length > 0);
-            searchLabel = sirets.join(", ");
+            // Parse: comma, space, newline, semicolon separated
+            const sirets = siretInputVal.split(/[,;\s\n\r]+/).map(s => s.trim()).filter(s => s.length > 0);
+            searchLabel = `${sirets.length} SIRET`;
             for (let i = 0; i < sirets.length; i++) {
+                if (searchStopped) {
+                    searchLabel += ` (arr\u00eat\u00e9 \u00e0 ${i}/${sirets.length})`;
+                    break;
+                }
                 searchText.textContent = `Recherche ${i + 1}/${sirets.length}...`;
-                const res = await searchBySiret(sirets[i], apiKey);
-                currentResults.push(...res);
-                if (i < sirets.length - 1) await delay(300);
+                try {
+                    const res = await searchBySiret(sirets[i], apiKey);
+                    currentResults.push(...res);
+                } catch (err) {
+                    if (err.message === "AUTH_ERROR") throw err;
+                    errorsList.push(sirets[i]);
+                }
+                if (i < sirets.length - 1) await delay(150);
+            }
+            if (errorsList.length > 0) {
+                searchLabel += ` (${errorsList.length} erreur(s))`;
             }
         } else {
             const noms = nomInput.split(",").map(s => s.trim()).filter(s => s.length > 0);
             searchLabel = noms.join(", ");
             for (let i = 0; i < noms.length; i++) {
+                if (searchStopped) break;
                 searchText.textContent = `Recherche ${i + 1}/${noms.length}...`;
                 const res = await searchByName(noms[i], apiKey);
                 currentResults.push(...res);
@@ -827,6 +846,7 @@ document.getElementById("searchForm").addEventListener("submit", async (e) => {
         btn.disabled = false;
         spinner.style.display = "none";
         searchText.textContent = "Rechercher";
+        document.getElementById("searchStopBtn").style.display = "none";
     }
 });
 
