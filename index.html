@@ -839,11 +839,13 @@ document.getElementById("searchForm").addEventListener("submit", async (e) => {
         // Filter by address/CP/ville if provided
         if (adresseFilter && currentResults.length > 0) {
             const filterWords = adresseFilter.split(/[\s,]+/).filter(w => w.length >= 2);
-            const filtered = currentResults.filter(r => {
-                const full = `${r.adresse} ${r.cp} ${r.commune}`.toUpperCase();
-                return filterWords.some(w => full.includes(w));
-            });
-            if (filtered.length > 0) currentResults = filtered;
+            if (filterWords.length > 0) {
+                const filtered = currentResults.filter(r => {
+                    const fullWords = `${r.adresse} ${r.cp} ${r.commune}`.toUpperCase().split(/[\s,\-]+/).filter(fw => fw.length >= 2);
+                    return filterWords.every(w => fullWords.some(fw => fw === w || (fw.length >= 3 && fw.startsWith(w)) || (w.length >= 3 && w.startsWith(fw))));
+                });
+                if (filtered.length > 0) currentResults = filtered;
+            }
         }
         renderResults(searchLabel);
     } catch (err) {
