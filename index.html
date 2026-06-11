@@ -816,7 +816,8 @@ document.getElementById("searchForm").addEventListener("submit", async (e) => {
     const nomInput = document.getElementById("companyName").value.trim().toUpperCase();
     const siretInputVal = document.getElementById("siretInput").value.trim();
     const adresseInputVal = document.getElementById("adresseInput").value.trim();
-    if (!apiKey || (!nomInput && !siretInputVal && !adresseInputVal)) return;
+    if (!apiKey) { alert("Veuillez saisir votre clé API INSEE."); return; }
+    if (!nomInput && !siretInputVal && !adresseInputVal) return;
     localStorage.setItem("insee_api_key", apiKey);
 
     const adresseFilter = adresseInputVal.toUpperCase();
@@ -886,8 +887,12 @@ document.getElementById("searchForm").addEventListener("submit", async (e) => {
         }
         renderResults(searchLabel);
     } catch (err) {
-        errorMsg.textContent = err.message === "AUTH_ERROR" ? "Cl\u00e9 API invalide ou expir\u00e9e (401)." : err.message;
-        errorMsg.style.display = "block";
+        if (err.message === "AUTH_ERROR") {
+            alert("Cl\u00e9 API invalide ou expir\u00e9e (erreur 401). V\u00e9rifiez votre cl\u00e9 API INSEE.");
+        } else {
+            errorMsg.textContent = err.message;
+            errorMsg.style.display = "block";
+        }
     } finally {
         btn.disabled = false;
         spinner.style.display = "none";
@@ -1283,6 +1288,7 @@ async function fixRows(rowsToFix) {
             }
         } catch (err) {
             if (err.message === "AUTH_ERROR") {
+                alert("Cl\u00e9 API invalide ou expir\u00e9e (erreur 401). V\u00e9rifiez votre cl\u00e9 API INSEE.");
                 log("Cl\u00e9 API invalide ! Correction arr\u00eat\u00e9e.", "error");
                 break;
             }
@@ -1426,6 +1432,7 @@ async function verifySirets() {
             }
         } catch (err) {
             if (err.message === "AUTH_ERROR") {
+                alert("Cl\u00e9 API invalide ou expir\u00e9e (erreur 401). V\u00e9rifiez votre cl\u00e9 API INSEE.");
                 log("Cl\u00e9 API invalide ! V\u00e9rification arr\u00eat\u00e9e.", "error");
                 break;
             }
@@ -1513,7 +1520,7 @@ async function retryWithNewName() {
     if (!newName) return;
 
     const apiKey = document.getElementById("apiKey").value.trim();
-    if (!apiKey) { alert("Cl\u00e9 API manquante."); return; }
+    if (!apiKey) { alert("Veuillez saisir votre cl\u00e9 API INSEE."); return; }
 
     const btn = document.getElementById("modalRetryBtn");
     btn.disabled = true;
@@ -1581,7 +1588,11 @@ async function retryWithNewName() {
             tbody.appendChild(tr);
         }
     } catch (err) {
-        alert(`Erreur : ${err.message}`);
+        if (err.message === "AUTH_ERROR") {
+            alert("Clé API invalide ou expirée (erreur 401). Vérifiez votre clé API INSEE.");
+        } else {
+            alert(`Erreur : ${err.message}`);
+        }
     } finally {
         btn.disabled = false;
         btn.textContent = "Relancer la recherche";
