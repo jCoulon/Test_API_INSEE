@@ -368,7 +368,7 @@
                 <textarea id="siretInput" rows="3" placeholder="Ex: 43024385700116, 30669069400139&#10;Ou collez une liste (1 par ligne)" style="padding:0.6rem 0.8rem;border:1.5px solid #ddd;border-radius:8px;font-size:0.9rem;resize:vertical;font-family:inherit;"></textarea>
             </div>
             <div class="form-group search">
-                <label for="adresseInput">Adresse / CP / Ville (optionnel, pour affiner)</label>
+                <label for="adresseInput">Adresse / CP / Ville (seul ou pour affiner)</label>
                 <input type="text" id="adresseInput" placeholder="Ex: 63000, CLERMONT-FERRAND, 12 RUE...">
             </div>
             <button type="submit" class="btn btn-primary" id="searchBtn">
@@ -773,6 +773,34 @@ async function smartSearchByName(nom, apiKey) {
     return [];
 }
 
+async function searchByAddress(adresseInput, apiKey) {
+    const normalized = normalizeText(adresseInput);
+    const words = normalized.split(/[\s,]+/).filter(w => w.length >= 2);
+    if (words.length === 0) return [];
+
+    const queryParts = [];
+    const cpMatch = words.find(w => /^\d{5}$/.test(w));
+    const nonCpWords = words.filter(w => !/^\d{5}$/.test(w));
+    // Numbers that look like street numbers (1-4 digits)
+    const numMatch = nonCpWords.find(w => /^\d{1,4}$/.test(w));
+    const textWords = nonCpWords.filter(w => !/^\d{1,4}$/.test(w));
+
+    if (cpMatch) queryParts.push(`codePostalEtablissement:${cpMatch}`);
+    if (textWords.length > 0) {
+        queryParts.push(`libelleVoieEtablissement:(${textWords.join(" ")})`);
+    }
+    if (numMatch) queryParts.push(`numeroVoieEtablissement:${numMatch}`);
+
+    if (queryParts.length === 0) return [];
+
+    const u = new URL(`${API_BASE}/siret`);
+    u.searchParams.set("q", queryParts.join(" AND "));
+    u.searchParams.set("nombre", "100");
+    const result = await fetchWithRetry(u.toString(), apiKey);
+    if (result.status === 404 || !result.data) return [];
+    return filterActiveEtablissements(result.data);
+}
+
 async function searchBySiret(siret, apiKey) {
     const url = `${API_BASE}/siret/${siret}`;
     const result = await fetchWithRetry(url, apiKey);
@@ -787,10 +815,11 @@ document.getElementById("searchForm").addEventListener("submit", async (e) => {
     const apiKey = document.getElementById("apiKey").value.trim();
     const nomInput = document.getElementById("companyName").value.trim().toUpperCase();
     const siretInputVal = document.getElementById("siretInput").value.trim();
-    if (!apiKey || (!nomInput && !siretInputVal)) return;
+    const adresseInputVal = document.getElementById("adresseInput").value.trim();
+    if (!apiKey || (!nomInput && !siretInputVal && !adresseInputVal)) return;
     localStorage.setItem("insee_api_key", apiKey);
 
-    const adresseFilter = document.getElementById("adresseInput").value.trim().toUpperCase();
+    const adresseFilter = adresseInputVal.toUpperCase();
     const btn = document.getElementById("searchBtn");
     const spinner = document.getElementById("spinner");
     const searchText = document.getElementById("searchText");
@@ -829,7 +858,7 @@ document.getElementById("searchForm").addEventListener("submit", async (e) => {
             if (errorsList.length > 0) {
                 searchLabel += ` (${errorsList.length} erreur(s))`;
             }
-        } else {
+        } else if (nomInput.length > 0) {
             const noms = nomInput.split(",").map(s => s.trim()).filter(s => s.length > 0);
             searchLabel = noms.join(", ");
             for (let i = 0; i < noms.length; i++) {
@@ -839,9 +868,13 @@ document.getElementById("searchForm").addEventListener("submit", async (e) => {
                 currentResults.push(...res);
                 if (i < noms.length - 1) await delay(300);
             }
+        } else if (adresseInputVal.length > 0) {
+            searchLabel = adresseInputVal;
+            searchText.textContent = "Recherche par adresse...";
+            currentResults = await searchByAddress(adresseInputVal, apiKey);
         }
-        // Filter by address/CP/ville if provided
-        if (adresseFilter && currentResults.length > 0) {
+        // Filter by address/CP/ville if provided (skip when address was the primary search)
+        if (adresseFilter && currentResults.length > 0 && (nomInput || siretInputVal)) {
             const filterWords = normalizeText(adresseFilter).split(/[\s,]+/).filter(w => w.length >= 2);
             if (filterWords.length > 0) {
                 const filtered = currentResults.filter(r => {
