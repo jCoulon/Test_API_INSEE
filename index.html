@@ -474,6 +474,7 @@
         </div>
         <p id="showingInfo" style="font-size:0.78rem;color:#999;margin-top:0.5rem;"></p>
     </div>
+</div>
 <!-- Selection modal -->
 <div class="modal-overlay" id="modalOverlay">
     <div class="modal">
@@ -1340,8 +1341,6 @@ async function verifySirets() {
             siret = row.cells[colMap.siren].trim() + row.cells[colMap.nic].trim().padStart(5, "0");
         }
         if (!siret || siret.length < 14) {
-            // Can't verify without SIRET, skip
-            processed++;
             continue;
         }
 
