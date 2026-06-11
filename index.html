@@ -522,6 +522,10 @@ let currentFilter = "all";
 let correctionStopped = false;
 let searchStopped = false;
 
+function normalizeText(s) {
+    return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase();
+}
+
 // Restore API key
 const savedKey = localStorage.getItem("insee_api_key");
 if (savedKey) document.getElementById("apiKey").value = savedKey;
@@ -838,10 +842,10 @@ document.getElementById("searchForm").addEventListener("submit", async (e) => {
         }
         // Filter by address/CP/ville if provided
         if (adresseFilter && currentResults.length > 0) {
-            const filterWords = adresseFilter.split(/[\s,]+/).filter(w => w.length >= 2);
+            const filterWords = normalizeText(adresseFilter).split(/[\s,]+/).filter(w => w.length >= 2);
             if (filterWords.length > 0) {
                 const filtered = currentResults.filter(r => {
-                    const fullWords = `${r.adresse} ${r.cp} ${r.commune}`.toUpperCase().split(/[\s,\-]+/).filter(fw => fw.length >= 2);
+                    const fullWords = normalizeText(`${r.adresse} ${r.cp} ${r.commune}`).split(/[\s,\-]+/).filter(fw => fw.length >= 2);
                     return filterWords.every(w => fullWords.some(fw => fw === w || (fw.length >= 3 && fw.startsWith(w)) || (w.length >= 3 && w.startsWith(fw))));
                 });
                 if (filtered.length > 0) currentResults = filtered;
@@ -1167,8 +1171,8 @@ async function fixRows(rowsToFix) {
         // Normalize CP: pad to 5 digits (Excel may strip leading zeros)
         const cpRaw = colMap.cp !== undefined ? row.cells[colMap.cp].trim() : "";
         const cp = cpRaw && /^\d+$/.test(cpRaw) ? cpRaw.padStart(5, "0") : cpRaw;
-        const ville = colMap.ville !== undefined ? row.cells[colMap.ville].trim().toUpperCase() : "";
-        const adresse = colMap.adresse !== undefined ? row.cells[colMap.adresse].trim().toUpperCase() : "";
+        const ville = colMap.ville !== undefined ? normalizeText(row.cells[colMap.ville].trim()) : "";
+        const adresse = colMap.adresse !== undefined ? normalizeText(row.cells[colMap.adresse].trim()) : "";
 
         log(`  Recherche: ${nom} | CP: ${cp} | Ville: ${ville} | Adresse: ${adresse}`, "");
 
@@ -1192,7 +1196,7 @@ async function fixRows(rowsToFix) {
                     if (cp && rCp === cp) score += 3;
                     // Ville: match in both directions
                     if (ville && r.commune) {
-                        const rVille = r.commune.toUpperCase();
+                        const rVille = normalizeText(r.commune);
                         // Check if at least part of the ville matches
                         const villeWords = ville.split(/[\s\-]+/).filter(w => w.length >= 3);
                         const rVilleWords = rVille.split(/[\s\-]+/).filter(w => w.length >= 3);
@@ -1201,7 +1205,7 @@ async function fixRows(rowsToFix) {
                     }
                     // Adresse: match significant words
                     if (adresse && r.adresse) {
-                        const rAddr = r.adresse.toUpperCase();
+                        const rAddr = normalizeText(r.adresse);
                         const addrWords = adresse.split(/[\s,]+/).filter(w => w.length >= 3);
                         const matched = addrWords.filter(w => rAddr.includes(w)).length;
                         if (matched > 0) score += matched;
@@ -1227,13 +1231,13 @@ async function fixRows(rowsToFix) {
                         const rCp2 = (r.cp || "").padStart(5, "0");
                         if (cp && rCp2 === cp) sc += 3;
                         if (ville && r.commune) {
-                            const rv = r.commune.toUpperCase();
+                            const rv = normalizeText(r.commune);
                             const vw = ville.split(/[\s\-]+/).filter(w => w.length >= 3);
                             const rw = rv.split(/[\s\-]+/).filter(w => w.length >= 3);
                             if (vw.some(w => rv.includes(w)) || rw.some(w => ville.includes(w))) sc += 2;
                         }
                         if (adresse && r.adresse) {
-                            const ra = r.adresse.toUpperCase();
+                            const ra = normalizeText(r.adresse);
                             const aw = adresse.split(/[\s,]+/).filter(w => w.length >= 3);
                             sc += aw.filter(w => ra.includes(w)).length;
                         }
@@ -1346,8 +1350,8 @@ async function verifySirets() {
             continue;
         }
 
-        const nom = colMap.nom !== undefined ? row.cells[colMap.nom].trim().toUpperCase() : "";
-        const ville = colMap.ville !== undefined ? row.cells[colMap.ville].trim().toUpperCase() : "";
+        const nom = colMap.nom !== undefined ? normalizeText(row.cells[colMap.nom].trim()) : "";
+        const ville = colMap.ville !== undefined ? normalizeText(row.cells[colMap.ville].trim()) : "";
         progressText.textContent = `V\u00e9rification ${processed}/${rowsToVerify.length} : ${siret}...`;
 
         try {
@@ -1362,12 +1366,12 @@ async function verifySirets() {
             } else {
                 const etab = results[0];
                 // Check name match
-                const apiNom = (etab.denomination || "").toUpperCase();
+                const apiNom = normalizeText(etab.denomination || "");
                 const nomWords = nom.split(/[\s\-]+/).filter(w => w.length >= 3);
                 const nameMatch = nomWords.length === 0 || nomWords.some(w => apiNom.includes(w)) || apiNom.split(/[\s\-]+/).some(w => w.length >= 3 && nom.includes(w));
 
                 // Check ville match
-                const apiVille = (etab.commune || "").toUpperCase();
+                const apiVille = normalizeText(etab.commune || "");
                 const villeWords = ville.split(/[\s\-]+/).filter(w => w.length >= 3);
                 const apiVilleWords = apiVille.split(/[\s\-]+/).filter(w => w.length >= 3);
                 const villeMatch = !ville || villeWords.some(w => apiVille.includes(w)) || apiVilleWords.some(w => ville.includes(w));
@@ -1494,21 +1498,21 @@ async function retryWithNewName() {
         // Re-score with file's CP/ville/adresse
         const cpRaw = colMap.cp !== undefined ? currentModalRow.cells[colMap.cp].trim() : "";
         const cp = cpRaw && /^\d+$/.test(cpRaw) ? cpRaw.padStart(5, "0") : cpRaw;
-        const ville = colMap.ville !== undefined ? currentModalRow.cells[colMap.ville].trim().toUpperCase() : "";
-        const adresse = colMap.adresse !== undefined ? currentModalRow.cells[colMap.adresse].trim().toUpperCase() : "";
+        const ville = colMap.ville !== undefined ? normalizeText(currentModalRow.cells[colMap.ville].trim()) : "";
+        const adresse = colMap.adresse !== undefined ? normalizeText(currentModalRow.cells[colMap.adresse].trim()) : "";
 
         currentModalRow.candidates = results.map(r => {
             let sc = 0;
             const rCp = (r.cp || "").padStart(5, "0");
             if (cp && rCp === cp) sc += 3;
             if (ville && r.commune) {
-                const rv = r.commune.toUpperCase();
+                const rv = normalizeText(r.commune);
                 const vw = ville.split(/[\s\-]+/).filter(w => w.length >= 3);
                 const rw = rv.split(/[\s\-]+/).filter(w => w.length >= 3);
                 if (vw.some(w => rv.includes(w)) || rw.some(w => ville.includes(w))) sc += 2;
             }
             if (adresse && r.adresse) {
-                const ra = r.adresse.toUpperCase();
+                const ra = normalizeText(r.adresse);
                 const aw = adresse.split(/[\s,]+/).filter(w => w.length >= 3);
                 sc += aw.filter(w => ra.includes(w)).length;
             }
